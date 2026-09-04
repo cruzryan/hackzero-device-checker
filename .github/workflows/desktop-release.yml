@@ -42,7 +42,7 @@ jobs:
           $config | ConvertTo-Json -Depth 20 | Set-Content src-tauri/tauri.conf.json
           npx tauri build --bundles msi
           New-Item -ItemType Directory -Force -Path ../dist | Out-Null
-          $installer = Get-ChildItem target/release/bundle/msi/*.msi | Select-Object -First 1
+          $installer = Get-ChildItem src-tauri/target/release/bundle/msi/*.msi | Select-Object -First 1
           Copy-Item $installer.FullName ../dist/HackZero-Device-Checker-windows-amd64.msi
           Copy-Item "$($installer.FullName).sig" ../dist/HackZero-Device-Checker-windows-amd64.msi.sig
       - uses: anchore/sbom-action@v0
@@ -78,8 +78,8 @@ jobs:
           VERSION="$version" node -e 'const fs=require("fs");const p="src-tauri/tauri.conf.json";const c=JSON.parse(fs.readFileSync(p));c.version=process.env.VERSION;fs.writeFileSync(p,JSON.stringify(c,null,2))'
           npx tauri build --bundles app
           mkdir -p ../dist
-          pkgbuild --component target/release/bundle/macos/HackZero\ Device\ Checker.app --install-location /Applications ../dist/HackZero-Device-Checker-macos-arm64.pkg
-          updater="$(find target/release/bundle/macos -name '*.app.tar.gz' -type f | head -n 1)"
+          pkgbuild --component src-tauri/target/release/bundle/macos/HackZero\ Device\ Checker.app --install-location /Applications ../dist/HackZero-Device-Checker-macos-arm64.pkg
+          updater="$(find src-tauri/target/release/bundle/macos -name '*.app.tar.gz' -type f | head -n 1)"
           cp "$updater" ../dist/HackZero-Device-Checker-macos-arm64.app.tar.gz
           cp "$updater.sig" ../dist/HackZero-Device-Checker-macos-arm64.app.tar.gz.sig
       - uses: anchore/sbom-action@v0
@@ -115,8 +115,8 @@ jobs:
           VERSION="$version" node -e 'const fs=require("fs");const p="src-tauri/tauri.conf.json";const c=JSON.parse(fs.readFileSync(p));c.version=process.env.VERSION;fs.writeFileSync(p,JSON.stringify(c,null,2))'
           npx tauri build --bundles deb,appimage
           mkdir -p ../dist
-          cp target/release/bundle/deb/*.deb ../dist/hackzero-device-checker-linux-amd64.deb
-          updater="$(find target/release/bundle/appimage -name '*.AppImage' -type f | head -n 1)"
+          cp src-tauri/target/release/bundle/deb/*.deb ../dist/hackzero-device-checker-linux-amd64.deb
+          updater="$(find src-tauri/target/release/bundle/appimage -name '*.AppImage' -type f | head -n 1)"
           cp "$updater" ../dist/hackzero-device-checker-linux-amd64.AppImage
           cp "$updater.sig" ../dist/hackzero-device-checker-linux-amd64.AppImage.sig
       - uses: anchore/sbom-action@v0
