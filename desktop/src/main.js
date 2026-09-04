@@ -35,14 +35,20 @@ function render(report) {
 
 function renderConnection(connection) {
   const action = document.querySelector("#connectHackZero");
+  const title = document.querySelector("#connectionTitle");
+  const description = document.querySelector("#connectionDescription");
   if (connection?.paired) {
     const identity = connection.person_name || "Connected device";
     const workspace = connection.workspace_name ? ` · ${connection.workspace_name}` : "";
     action.textContent = `${identity}${workspace}`;
     action.disabled = true;
+    title.textContent = "This device is connected";
+    description.textContent = `${identity} is sending read-only posture checks to ${connection.workspace_name || "your workspace"}.`;
   } else {
     action.textContent = "Connect to HackZero";
     action.disabled = false;
+    title.textContent = "Connect this device to HackZero";
+    description.textContent = "Sign in to send this device's read-only posture record to your workspace.";
   }
 }
 
