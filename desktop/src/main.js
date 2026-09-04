@@ -20,7 +20,10 @@ function render(report) {
   document.querySelector("#description").textContent = hasFailure
     ? "Fix the items below, then check again. We only read these settings; we never change them."
     : "These security settings are on. We only read them; we never change anything on your device.";
-  document.querySelector("#checkedAt").textContent = `Checked locally: ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(report.checked_at))}`;
+  const checkTime = new Date(report.checked_at);
+  document.querySelector("#checkedAt").textContent = Number.isNaN(checkTime.valueOf())
+    ? "Checked locally"
+    : `Checked locally: ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(checkTime)}`;
   document.querySelector("#posture").innerHTML = findings.map((finding) => `
     <article class="finding ${finding.status}">
       <div><span class="indicator">${finding.status === "pass" ? "✓" : finding.status === "fail" ? "!" : "–"}</span><strong>${labels[finding.check] || finding.check}</strong></div>
@@ -39,4 +42,8 @@ async function refresh() {
 
 document.querySelector("#checkAgain").addEventListener("click", refresh);
 document.querySelector("#openHackZero").addEventListener("click", () => openUrl("https://hackzero.ai"));
+// Pairing is intentionally a one-time HackZero sign-in. Until the service-side
+// pairing endpoint is present, do not show a made-up person, workspace, or
+// connected state in this app.
+document.querySelector("#connectHackZero").addEventListener("click", () => openUrl("https://hackzero.ai/login"));
 refresh();

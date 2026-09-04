@@ -58,28 +58,33 @@ fn checker_report() -> Report {
     if let Ok(result) = output {
         if result.status.success() {
             if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&result.stdout) {
-                let findings = json
-                    .get("findings")
-                    .and_then(|x| x.as_array())
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter_map(|f| {
-                                Some(Finding {
-                                    check: f.get("check")?.as_str()?.to_string(),
-                                    status: f.get("status")?.as_str()?.to_string(),
-                                    reason: f
-                                        .get("reason")
-                                        .and_then(|x| x.as_str())
-                                        .map(str::to_string),
-                                })
-                            })
-                            .collect()
+                // The Go collector exposes a deliberately named report schema,
+                // rather than an untyped array. Keep this adapter fixed and
+                // explicit so a UI value can never select a command or field.
+                let findings = [
+                    ("disk_encryption", "disk_encryption"),
+                    ("screen_lock", "screen_lock"),
+                    ("automatic_updates", "automatic_updates"),
+                    ("pending_updates", "pending_maintenance"),
+                    ("endpoint_protection", "endpoint_protection"),
+                ]
+                .into_iter()
+                .filter_map(|(check, field)| {
+                    let signal = json.get(field)?;
+                    Some(Finding {
+                        check: check.to_string(),
+                        status: signal.get("status")?.as_str()?.to_string(),
+                        reason: signal
+                            .get("code")
+                            .and_then(|x| x.as_str())
+                            .map(str::to_string),
                     })
-                    .unwrap_or_else(unavailable_findings);
+                })
+                .collect::<Vec<_>>();
+                let findings = if findings.is_empty() { unavailable_findings() } else { findings };
                 return Report {
                     checked_at: json
-                        .get("checked_at")
+                        .get("collected_at")
                         .and_then(|x| x.as_str())
                         .unwrap_or("")
                         .to_string(),
@@ -120,6 +125,14 @@ fn main() {
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
             TrayIconBuilder::new()
+                // An explicit icon is required: without it Windows can create
+                // an empty/invisible tray entry during development.
+                .icon(
+                    app.default_window_icon()
+                        .expect("application icon is bundled")
+                        .clone(),
+                )
+                .tooltip("HackZero Device Checker — local checks active")
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
