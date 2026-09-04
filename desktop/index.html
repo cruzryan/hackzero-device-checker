@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HackZero Device Checker</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div class="brand"><span class="mark"></span><span>HACKZERO</span><i></i></div>
+        <span class="local">LOCAL DEVICE CHECK</span>
+      </header>
+      <section class="hero">
+        <p class="eyebrow">DEVICE CHECKER <b></b></p>
+        <h1 id="headline">Checking this device</h1>
+        <p id="description">A read-only check of the settings that help protect company data.</p>
+        <div class="privacy"><span>⌁</span> Nothing leaves this device until you connect it to HackZero.</div>
+      </section>
+      <section aria-label="Device posture" class="posture" id="posture"></section>
+      <footer>
+        <p id="checkedAt">Checking locally…</p>
+        <div class="actions">
+          <button class="secondary" id="openHackZero">Open HackZero ↗</button>
+          <button class="primary" id="checkAgain">Check again</button>
+        </div>
+      </footer>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

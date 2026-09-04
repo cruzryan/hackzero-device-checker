@@ -56,6 +56,23 @@ notarized until that platform's genuine signing credentials are configured.
 
 ## Development
 
+### Desktop application
+
+`desktop/` is the cross-platform [Tauri 2](https://v2.tauri.app/) shell: a
+custom HackZero window with a native tray/menu. The UI is allowed to run only
+fixed local checker actions; it never turns UI text into a shell command, and
+it needs no permanent loopback server.
+
+```powershell
+cd desktop
+npm install
+npm run dev
+```
+
+The build host needs its normal native linker. Windows requires Visual Studio
+Build Tools (MSVC) or the GNU toolchain's `dlltool`; macOS and Debian/Ubuntu
+packages are built on their native CI runners.
+
 ```powershell
 go test ./...
 go vet ./...
