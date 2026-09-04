@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hackzero/device-checker/internal/posture"
+	"github.com/hackzero/device-checker/internal/probe"
 )
 
 var version = "dev"
@@ -19,9 +20,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: device-checker status")
 		os.Exit(2)
 	}
-	// This deliberately reports unknown local posture until an OS-specific
-	// read-only probe is present. It must never manufacture a compliance pass.
-	report := posture.Evaluate(posture.Observation{}, runtime.GOOS, runtime.GOARCH, version, time.Now())
+	observation, err := probe.Collect()
+	if err != nil {
+		// A collection error is not evidence of failure.
+		observation = posture.Observation{}
+	}
+	report := posture.Evaluate(observation, runtime.GOOS, runtime.GOARCH, version, time.Now())
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(report); err != nil {
