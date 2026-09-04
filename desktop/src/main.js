@@ -31,6 +31,19 @@ function render(report) {
     </article>`).join("");
 }
 
+function renderConnection(connection) {
+  const action = document.querySelector("#connectHackZero");
+  if (connection?.paired) {
+    const identity = connection.person_name || "Connected device";
+    const workspace = connection.workspace_name ? ` · ${connection.workspace_name}` : "";
+    action.textContent = `${identity}${workspace}`;
+    action.disabled = true;
+  } else {
+    action.textContent = "Connect to HackZero";
+    action.disabled = false;
+  }
+}
+
 async function refresh() {
   const button = document.querySelector("#checkAgain");
   button.disabled = true;
@@ -42,8 +55,11 @@ async function refresh() {
 
 document.querySelector("#checkAgain").addEventListener("click", refresh);
 document.querySelector("#openHackZero").addEventListener("click", () => openUrl("https://hackzero.ai"));
-// Pairing is intentionally a one-time HackZero sign-in. Until the service-side
-// pairing endpoint is present, do not show a made-up person, workspace, or
-// connected state in this app.
-document.querySelector("#connectHackZero").addEventListener("click", () => openUrl("https://hackzero.ai/login"));
-refresh();
+document.querySelector("#connectHackZero").addEventListener("click", async () => {
+  const button = document.querySelector("#connectHackZero");
+  button.disabled = true;
+  button.textContent = "Waiting for sign in…";
+  try { renderConnection(await invoke("connect_hackzero")); }
+  catch (error) { button.disabled = false; button.textContent = "Try connecting again"; }
+});
+Promise.all([refresh(), invoke("connection_status").then(renderConnection)]);

@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
 use tauri::{
@@ -19,6 +19,13 @@ struct Finding {
 struct Report {
     checked_at: String,
     findings: Vec<Finding>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct Connection {
+    paired: bool,
+    workspace_name: Option<String>,
+    person_name: Option<String>,
 }
 
 fn unavailable_findings() -> Vec<Finding> {
@@ -99,6 +106,13 @@ fn checker_report() -> Report {
     }
 }
 
+fn checker_connection() -> Connection {
+    let output = Command::new(checker_path()).arg("connection").output();
+    output.ok().and_then(|result| serde_json::from_slice(&result.stdout).ok()).unwrap_or(Connection {
+        paired: false, workspace_name: None, person_name: None,
+    })
+}
+
 fn checker_path() -> PathBuf {
     // An installed build will resolve this from its bundled resources. During
     // development this fixed path points at the checked-in Windows collector.
@@ -115,6 +129,27 @@ fn chrono_like_now() -> String {
 #[tauri::command]
 fn check_now() -> Report {
     checker_report()
+}
+
+#[tauri::command]
+fn connection_status() -> Connection { checker_connection() }
+
+#[tauri::command]
+async fn connect_hackzero() -> Result<Connection, String> {
+    // Browser login stays in the default browser. The app waits only for the
+    // loopback callback, then receives a one-use code and no browser session.
+    tauri::async_runtime::spawn_blocking(|| {
+        let output = Command::new(checker_path())
+            .arg("pair")
+            .arg("--server")
+            .arg(std::env::var("HACKZERO_SERVER").unwrap_or_else(|_| "https://hackzero.ai".into()))
+            .output()
+            .map_err(|error| format!("Could not start Device Checker: {error}"))?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        }
+        serde_json::from_slice(&output.stdout).map_err(|error| format!("Invalid pairing response: {error}"))
+    }).await.map_err(|error| error.to_string())?
 }
 
 fn main() {
@@ -147,7 +182,7 @@ fn main() {
                 .build(app)?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![check_now])
+        .invoke_handler(tauri::generate_handler![check_now, connection_status, connect_hackzero])
         .run(tauri::generate_context!())
         .expect("Tauri application error");
 }
