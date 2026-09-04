@@ -184,6 +184,15 @@ async fn background_tick(app: tauri::AppHandle) -> Result<(), String> {
 fn main() {
     let launch_in_background = std::env::args().any(|arg| arg == "--background");
     tauri::Builder::default()
+        // A second launch should focus the resident checker instead of making
+        // another scheduler/reporting process. This also prevents duplicate
+        // tray icons at login.
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
