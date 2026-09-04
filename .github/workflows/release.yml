@@ -51,7 +51,10 @@ jobs:
         uses: actions/attest-build-provenance@v2
         with: { subject-path: dist/HackZero-Device-Checker-windows-amd64.msi }
       - uses: actions/upload-artifact@v4
-        with: { name: windows; path: dist/; if-no-files-found: error }
+        with:
+          name: windows
+          path: dist/
+          if-no-files-found: error
 
   macos:
     runs-on: macos-latest
@@ -90,7 +93,10 @@ jobs:
         uses: actions/attest-build-provenance@v2
         with: { subject-path: dist/HackZero-Device-Checker-macos-arm64.pkg }
       - uses: actions/upload-artifact@v4
-        with: { name: macos; path: dist/; if-no-files-found: error }
+        with:
+          name: macos
+          path: dist/
+          if-no-files-found: error
 
   debian:
     runs-on: ubuntu-latest
@@ -130,14 +136,18 @@ jobs:
         uses: actions/attest-build-provenance@v2
         with: { subject-path: "dist/*.deb" }
       - uses: actions/upload-artifact@v4
-        with: { name: debian; path: dist/; if-no-files-found: error }
+        with:
+          name: debian
+          path: dist/
+          if-no-files-found: error
 
   publish:
     needs: [windows, macos, debian]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
-        with: { path: release }
+        with:
+          path: release
       - name: Combine checksums
         run: |
           cd release
