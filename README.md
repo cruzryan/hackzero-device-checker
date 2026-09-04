@@ -3,8 +3,10 @@
 [![CI](https://github.com/cruzryan/hackzero-device-checker/actions/workflows/ci.yml/badge.svg)](https://github.com/cruzryan/hackzero-device-checker/actions/workflows/ci.yml)
 
 A small, read-only endpoint evidence collector for SOC 2 controls. It checks
-the security posture of a device and sends a signed report to the organization's
-HackZero workspace after the device owner explicitly pairs it.
+the security posture of a device. The repository also contains tested building
+blocks for per-device signatures, PKCE pairing values, scheduling, and a
+bounded offline queue; the hosted pairing and reporting contract is not
+published yet, so installers do not activate those building blocks.
 
 It is **not** an MDM, remote-control tool, asset tracker, keystroke logger, or
 browser extension. It does not enforce settings, inspect documents, collect
@@ -66,11 +68,15 @@ only synthetic probes and never inspect the host running the tests.
 ## Status and packaging
 
 The repository contains the deliberately narrow collector core, report schema,
-and deterministic posture evaluator. Release CI produces an MSI for Windows,
+deterministic posture evaluator, and unit-tested local security primitives.
+Release CI produces an MSI for Windows,
 a PKG for macOS, and a DEB for Ubuntu/Debian, with a SHA-256 manifest and a
 GitHub provenance attestation for each installer. These early packages install
 the command-line collector only; background service, pairing, reporting, and
-the menu/tray surface are intentionally not claimed as complete.
+the menu/tray surface are intentionally not claimed as complete. In particular,
+the current preview does not pair to a workspace or upload evidence. Do not run
+it as a background service until the hosted protocol and platform credential
+storage implementations are released and independently reviewed.
 
 Do not use an unreleased build as compliance evidence.
 
