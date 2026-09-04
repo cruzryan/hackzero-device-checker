@@ -1,9 +1,10 @@
 name: Release
 
 on:
+  workflow_dispatch: {}
   push:
-    tags: ["v*"]
-  workflow_dispatch:
+    tags:
+      - "v*"
 
 # Provenance uses GitHub's short-lived OIDC credentials. Platform signing is
 # intentionally absent until its real credentials have been configured.
