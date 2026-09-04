@@ -5,5 +5,9 @@
   "identifier": "ai.hackzero.devicechecker",
   "build": { "beforeDevCommand": "npm run frontend:dev", "beforeBuildCommand": "npm run frontend:build", "devUrl": "http://127.0.0.1:45873", "frontendDist": "../dist" },
   "app": { "windows": [{ "label": "main", "title": "HackZero Device Checker", "width": 860, "height": 690, "minWidth": 700, "minHeight": 560, "resizable": true }], "security": { "csp": "default-src 'self'; style-src 'self' 'unsafe-inline';" } },
-  "bundle": { "active": true, "targets": "all", "resources": { "../../bin/device-checker": "device-checker" } }
+  "bundle": { "active": true, "targets": "all", "resources": {
+    "../../bin/device-checker-windows-amd64.exe": "device-checker-windows-amd64.exe",
+    "../../bin/device-checker-macos-arm64": "device-checker-macos-arm64",
+    "../../bin/device-checker-linux-amd64": "device-checker-linux-amd64"
+  } }
 }

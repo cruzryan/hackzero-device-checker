@@ -123,7 +123,14 @@ fn checker_path(app: &tauri::AppHandle) -> PathBuf {
     let development = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../bin/device-checker-windows-amd64.exe");
     if cfg!(debug_assertions) && development.exists() { return development; }
-    app.path().resource_dir().expect("application resources are available").join("device-checker")
+    let bundled_name = if cfg!(target_os = "windows") {
+        "device-checker-windows-amd64.exe"
+    } else if cfg!(target_os = "macos") {
+        "device-checker-macos-arm64"
+    } else {
+        "device-checker-linux-amd64"
+    };
+    app.path().resource_dir().expect("application resources are available").join(bundled_name)
 }
 fn chrono_like_now() -> String {
     chrono::Utc::now().to_rfc3339()
