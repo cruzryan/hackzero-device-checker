@@ -28,6 +28,13 @@ struct Connection {
     person_name: Option<String>,
 }
 
+#[derive(Serialize)]
+struct UpdateStatus {
+    status: &'static str,
+    current_version: &'static str,
+    detail: &'static str,
+}
+
 fn unavailable_findings() -> Vec<Finding> {
     vec![
         Finding {
@@ -135,6 +142,19 @@ fn checker_path(app: &tauri::AppHandle) -> PathBuf {
 fn chrono_like_now() -> String {
     chrono::Utc::now().to_rfc3339()
 }
+
+#[tauri::command]
+fn update_status() -> UpdateStatus {
+    // A GitHub Release page, a checksum file, or a version number alone is not
+    // enough to trust an in-app update. Tauri's updater needs a signed manifest
+    // and its configured public key. This preview deliberately has neither, so
+    // it must never claim an update is available or ready to restart.
+    UpdateStatus {
+        status: "unconfigured",
+        current_version: env!("CARGO_PKG_VERSION"),
+        detail: "No verified update manifest is configured.",
+    }
+}
 #[tauri::command]
 fn check_now(app: tauri::AppHandle) -> Report {
     checker_report(&app)
@@ -191,7 +211,12 @@ fn main() {
                 .build(app)?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![check_now, connection_status, connect_hackzero])
+        .invoke_handler(tauri::generate_handler![
+            check_now,
+            connection_status,
+            connect_hackzero,
+            update_status
+        ])
         .run(tauri::generate_context!())
         .expect("Tauri application error");
 }

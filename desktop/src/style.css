@@ -29,9 +29,12 @@ h1 { font: 500 42px/1.03 Georgia, "Times New Roman", serif; letter-spacing: -2px
 .result small { color: #77716c; text-transform: capitalize; font-size: 11px; max-width: 250px; }
 footer { margin-top: auto; border-top: 1px solid #dfddda; padding-top: 16px; display: flex; align-items: center; justify-content: space-between; }
 footer p { color: #77716c; font-size: 12px; margin: 0; }
+.status-copy { display: grid; gap: 3px; }
+.update-state { color: #938c85; font-size: 11px; }
 .actions { display: flex; gap: 10px; }
 button { border-radius: 99px; padding: 11px 18px; font: 600 14px/1 inherit; cursor: pointer; border: 1px solid #111; }
 .primary { background: #111; color: #fff; }
 .primary:disabled { opacity: .6; cursor: wait; }
 .secondary { color: #222; background: transparent; border-color: #c9c5c0; }
+.text-button { border-color: transparent; background: transparent; color: #655f59; padding-inline: 9px; }
 @media (max-height: 620px) { .app-shell { padding-block: 14px; } .hero { padding: 17px 0 12px; } h1 { font-size: 36px; } .connection-card { margin-top: 10px; padding-block: 8px; } .finding { min-height: 49px; } footer { padding-top: 11px; } }

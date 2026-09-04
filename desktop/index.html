@@ -26,8 +26,12 @@
       </section>
       <section aria-label="Device posture" class="posture" id="posture"></section>
       <footer>
-        <p id="checkedAt">Checking locally...</p>
+        <div class="status-copy">
+          <p id="checkedAt">Checking locally...</p>
+          <p class="update-state" id="updateState">Checking release status...</p>
+        </div>
         <div class="actions">
+          <button class="text-button" id="viewReleases">Releases</button>
           <button class="secondary" id="openHackZero">Open HackZero</button>
           <button class="primary" id="checkAgain">Check again</button>
         </div>

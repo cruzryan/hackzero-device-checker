@@ -44,6 +44,16 @@ function renderConnection(connection) {
   }
 }
 
+function renderUpdateStatus(update) {
+  const target = document.querySelector("#updateState");
+  const version = update?.current_version ? `Version ${update.current_version}` : "Version unavailable";
+  // Do not invent update availability. The native updater is deliberately
+  // absent until it has a verified release manifest and a trusted public key.
+  target.textContent = update?.status === "unconfigured"
+    ? `${version} · Updates are not configured for this preview.`
+    : `${version} · ${update?.detail || "Release status unavailable."}`;
+}
+
 async function refresh() {
   const button = document.querySelector("#checkAgain");
   button.disabled = true;
@@ -55,6 +65,7 @@ async function refresh() {
 
 document.querySelector("#checkAgain").addEventListener("click", refresh);
 document.querySelector("#openHackZero").addEventListener("click", () => openUrl("https://hackzero.ai"));
+document.querySelector("#viewReleases").addEventListener("click", () => openUrl("https://github.com/cruzryan/hackzero-device-checker/releases"));
 document.querySelector("#connectHackZero").addEventListener("click", async () => {
   const button = document.querySelector("#connectHackZero");
   button.disabled = true;
@@ -62,4 +73,8 @@ document.querySelector("#connectHackZero").addEventListener("click", async () =>
   try { renderConnection(await invoke("connect_hackzero")); }
   catch (error) { button.disabled = false; button.textContent = "Try connecting again"; }
 });
-Promise.all([refresh(), invoke("connection_status").then(renderConnection)]);
+Promise.all([
+  refresh(),
+  invoke("connection_status").then(renderConnection),
+  invoke("update_status").then(renderUpdateStatus).catch(() => renderUpdateStatus()),
+]);
