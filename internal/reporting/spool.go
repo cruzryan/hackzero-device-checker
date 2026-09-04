@@ -103,7 +103,19 @@ func (s Spool) Pending() ([]Queued, error) {
 		}
 		queued = append(queued, Queued{Path: path, Envelope: envelope, queuedAt: info.ModTime()})
 	}
-	sort.Slice(queued, func(i, j int) bool { return queued[i].queuedAt.Before(queued[j].queuedAt) })
+	// Files created during a single tick can share a filesystem timestamp. The
+	// signed collection time is the stable primary ordering; on the intentional
+	// full-report + heartbeat tie, retain the useful posture report first.
+	sort.Slice(queued, func(i, j int) bool {
+		left, right := queued[i].Envelope, queued[j].Envelope
+		if !left.CreatedAt.Equal(right.CreatedAt) {
+			return left.CreatedAt.Before(right.CreatedAt)
+		}
+		if left.Kind != right.Kind {
+			return left.Kind == "full"
+		}
+		return queued[i].queuedAt.Before(queued[j].queuedAt)
+	})
 	return queued, nil
 }
 
