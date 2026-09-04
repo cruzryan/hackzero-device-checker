@@ -38,7 +38,7 @@ jobs:
       - name: Generate SPDX SBOM
         uses: anchore/sbom-action@v0
         with:
-          path: dist/device-checker.exe
+          path: .
           format: spdx-json
           output-file: dist/HackZero-Device-Checker-windows-amd64.spdx.json
           upload-artifact: false
@@ -80,7 +80,7 @@ jobs:
       - name: Generate SPDX SBOM
         uses: anchore/sbom-action@v0
         with:
-          path: dist/device-checker-macos-arm64
+          path: .
           format: spdx-json
           output-file: dist/HackZero-Device-Checker-macos-arm64.spdx.json
           upload-artifact: false
@@ -123,7 +123,7 @@ jobs:
       - name: Generate SPDX SBOM
         uses: anchore/sbom-action@v0
         with:
-          path: dist/device-checker-linux-amd64
+          path: .
           format: spdx-json
           output-file: dist/hackzero-device-checker-linux-amd64.spdx.json
           upload-artifact: false
