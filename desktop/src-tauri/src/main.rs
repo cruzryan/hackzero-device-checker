@@ -3,11 +3,18 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
     Manager,
 };
+
+// The Go collector communicates through captured stdout/stderr. Its short
+// checks must never create a visible console window on Windows.
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[derive(Serialize)]
 struct Finding {
@@ -61,7 +68,7 @@ fn unavailable_findings() -> Vec<Finding> {
 fn checker_report(app: &tauri::AppHandle) -> Report {
     // The only child process this UI is permitted to start is its sibling checker
     // with the fixed `status` argument. No UI text ever becomes a shell command.
-    let output = Command::new(checker_path(app)).arg("status").output();
+    let output = checker_command(app).arg("status").output();
     if let Ok(result) = output {
         if result.status.success() {
             if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&result.stdout) {
@@ -107,7 +114,7 @@ fn checker_report(app: &tauri::AppHandle) -> Report {
 }
 
 fn checker_connection(app: &tauri::AppHandle) -> Connection {
-    let output = Command::new(checker_path(app)).arg("connection").output();
+    let output = checker_command(app).arg("connection").output();
     output.ok().and_then(|result| serde_json::from_slice(&result.stdout).ok()).unwrap_or(Connection {
         paired: false, workspace_name: None, person_name: None,
     })
@@ -132,6 +139,13 @@ fn checker_path(app: &tauri::AppHandle) -> PathBuf {
     };
     app.path().resource_dir().expect("application resources are available").join(bundled_name)
 }
+
+fn checker_command(app: &tauri::AppHandle) -> Command {
+    let mut command = Command::new(checker_path(app));
+    #[cfg(target_os = "windows")]
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
+}
 fn chrono_like_now() -> String {
     chrono::Utc::now().to_rfc3339()
 }
@@ -149,7 +163,7 @@ async fn connect_hackzero(app: tauri::AppHandle) -> Result<Connection, String> {
     // Browser login stays in the default browser. The app waits only for the
     // loopback callback, then receives a one-use code and no browser session.
     tauri::async_runtime::spawn_blocking(move || {
-        let output = Command::new(checker_path(&app))
+        let output = checker_command(&app)
             .arg("pair")
             .arg("--server")
             .arg(std::env::var("HACKZERO_SERVER").unwrap_or_else(|_| "https://dashboard.hackzero.ai".into()))
@@ -168,7 +182,7 @@ async fn background_tick(app: tauri::AppHandle) -> Result<(), String> {
     // performs one durable scheduler tick, so there is no second daemon to
     // manage and no terminal window on any supported desktop platform.
     tauri::async_runtime::spawn_blocking(move || {
-        let output = Command::new(checker_path(&app))
+        let output = checker_command(&app)
             .arg("run")
             .arg("--once")
             .output()
