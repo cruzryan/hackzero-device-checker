@@ -58,10 +58,10 @@ fn unavailable_findings() -> Vec<Finding> {
     ]
 }
 
-fn checker_report() -> Report {
+fn checker_report(app: &tauri::AppHandle) -> Report {
     // The only child process this UI is permitted to start is its sibling checker
     // with the fixed `status` argument. No UI text ever becomes a shell command.
-    let output = Command::new(checker_path()).arg("status").output();
+    let output = Command::new(checker_path(app)).arg("status").output();
     if let Ok(result) = output {
         if result.status.success() {
             if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&result.stdout) {
@@ -106,40 +106,42 @@ fn checker_report() -> Report {
     }
 }
 
-fn checker_connection() -> Connection {
-    let output = Command::new(checker_path()).arg("connection").output();
+fn checker_connection(app: &tauri::AppHandle) -> Connection {
+    let output = Command::new(checker_path(app)).arg("connection").output();
     output.ok().and_then(|result| serde_json::from_slice(&result.stdout).ok()).unwrap_or(Connection {
         paired: false, workspace_name: None, person_name: None,
     })
 }
 
-fn checker_path() -> PathBuf {
+fn checker_path(app: &tauri::AppHandle) -> PathBuf {
     // An installed build will resolve this from its bundled resources. During
     // development this fixed path points at the checked-in Windows collector.
     // An environment override is for packaging/CI only; it never comes from UI.
     if let Some(path) = std::env::var_os("HACKZERO_CHECKER_BIN") {
         return PathBuf::from(path);
     }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../bin/device-checker-windows-amd64.exe")
+    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../bin/device-checker-windows-amd64.exe");
+    if cfg!(debug_assertions) && development.exists() { return development; }
+    app.path().resource_dir().expect("application resources are available").join("device-checker")
 }
 fn chrono_like_now() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 #[tauri::command]
-fn check_now() -> Report {
-    checker_report()
+fn check_now(app: tauri::AppHandle) -> Report {
+    checker_report(&app)
 }
 
 #[tauri::command]
-fn connection_status() -> Connection { checker_connection() }
+fn connection_status(app: tauri::AppHandle) -> Connection { checker_connection(&app) }
 
 #[tauri::command]
-async fn connect_hackzero() -> Result<Connection, String> {
+async fn connect_hackzero(app: tauri::AppHandle) -> Result<Connection, String> {
     // Browser login stays in the default browser. The app waits only for the
     // loopback callback, then receives a one-use code and no browser session.
-    tauri::async_runtime::spawn_blocking(|| {
-        let output = Command::new(checker_path())
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = Command::new(checker_path(&app))
             .arg("pair")
             .arg("--server")
             .arg(std::env::var("HACKZERO_SERVER").unwrap_or_else(|_| "https://hackzero.ai".into()))
