@@ -134,7 +134,7 @@ func saveState(state savedState) error {
 
 func pairDevice(args []string) {
 	flags := flag.NewFlagSet("pair", flag.ExitOnError)
-	server := flags.String("server", "https://hackzero.ai", "HackZero server URL")
+	server := flags.String("server", "https://dashboard.hackzero.ai", "HackZero server URL")
 	name := flags.String("name", hostname(), "device name")
 	_ = flags.Parse(args)
 	device, err := loadOrCreateIdentity()

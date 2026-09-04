@@ -152,7 +152,7 @@ async fn connect_hackzero(app: tauri::AppHandle) -> Result<Connection, String> {
         let output = Command::new(checker_path(&app))
             .arg("pair")
             .arg("--server")
-            .arg(std::env::var("HACKZERO_SERVER").unwrap_or_else(|_| "https://hackzero.ai".into()))
+            .arg(std::env::var("HACKZERO_SERVER").unwrap_or_else(|_| "https://dashboard.hackzero.ai".into()))
             .output()
             .map_err(|error| format!("Could not start Device Checker: {error}"))?;
         if !output.status.success() {
