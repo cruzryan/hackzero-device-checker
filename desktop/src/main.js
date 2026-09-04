@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 
 const labels = {
   disk_encryption: "Disk encryption",
@@ -44,14 +46,40 @@ function renderConnection(connection) {
   }
 }
 
-function renderUpdateStatus(update) {
+let availableUpdate = null;
+
+async function checkForUpdate() {
   const target = document.querySelector("#updateState");
-  const version = update?.current_version ? `Version ${update.current_version}` : "Version unavailable";
-  // Do not invent update availability. The native updater is deliberately
-  // absent until it has a verified release manifest and a trusted public key.
-  target.textContent = update?.status === "unconfigured"
-    ? `${version} · Updates are not configured for this preview.`
-    : `${version} · ${update?.detail || "Release status unavailable."}`;
+  const install = document.querySelector("#installUpdate");
+  target.textContent = "Checking for signed updates…";
+  try {
+    availableUpdate = await check();
+    if (!availableUpdate) {
+      target.textContent = "You’re on the latest signed release.";
+      return;
+    }
+    target.textContent = `Version ${availableUpdate.version} is ready to install.`;
+    install.hidden = false;
+  } catch {
+    // An update-server outage is never a failed security setting.
+    target.textContent = "Couldn’t check for updates. Try again later.";
+  }
+}
+
+async function installAvailableUpdate() {
+  const install = document.querySelector("#installUpdate");
+  if (!availableUpdate) return;
+  install.disabled = true;
+  install.textContent = "Downloading…";
+  try {
+    await availableUpdate.downloadAndInstall();
+    install.textContent = "Restarting…";
+    await relaunch();
+  } catch {
+    install.disabled = false;
+    install.textContent = "Try update again";
+    document.querySelector("#updateState").textContent = "The signed update could not be installed.";
+  }
 }
 
 async function refresh() {
@@ -66,6 +94,7 @@ async function refresh() {
 document.querySelector("#checkAgain").addEventListener("click", refresh);
 document.querySelector("#openHackZero").addEventListener("click", () => openUrl("https://hackzero.ai"));
 document.querySelector("#viewReleases").addEventListener("click", () => openUrl("https://github.com/cruzryan/hackzero-device-checker/releases"));
+document.querySelector("#installUpdate").addEventListener("click", installAvailableUpdate);
 document.querySelector("#connectHackZero").addEventListener("click", async () => {
   const button = document.querySelector("#connectHackZero");
   button.disabled = true;
@@ -76,5 +105,5 @@ document.querySelector("#connectHackZero").addEventListener("click", async () =>
 Promise.all([
   refresh(),
   invoke("connection_status").then(renderConnection),
-  invoke("update_status").then(renderUpdateStatus).catch(() => renderUpdateStatus()),
+  checkForUpdate(),
 ]);

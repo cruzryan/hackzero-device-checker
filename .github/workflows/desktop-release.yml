@@ -32,6 +32,8 @@ jobs:
       - name: Build desktop MSI
         working-directory: desktop
         shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           npm ci
           $version = $env:GITHUB_REF_NAME -replace '^desktop-v',''
@@ -40,7 +42,9 @@ jobs:
           $config | ConvertTo-Json -Depth 20 | Set-Content src-tauri/tauri.conf.json
           npx tauri build --bundles msi
           New-Item -ItemType Directory -Force -Path ../dist | Out-Null
-          Copy-Item target/release/bundle/msi/*.msi ../dist/HackZero-Device-Checker-windows-amd64.msi
+          $installer = Get-ChildItem target/release/bundle/msi/*.msi | Select-Object -First 1
+          Copy-Item $installer.FullName ../dist/HackZero-Device-Checker-windows-amd64.msi
+          Copy-Item "$($installer.FullName).sig" ../dist/HackZero-Device-Checker-windows-amd64.msi.sig
       - uses: anchore/sbom-action@v0
         with: { path: ., format: spdx-json, output-file: dist/HackZero-Device-Checker-windows-amd64.spdx.json, upload-artifact: false, upload-release-assets: false }
       - name: Hash and attest
@@ -61,6 +65,8 @@ jobs:
         with: { node-version: 22, cache: npm, cache-dependency-path: desktop/package-lock.json }
       - name: Prepare resources and package app
         shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           go test ./...
@@ -73,6 +79,9 @@ jobs:
           npx tauri build --bundles app
           mkdir -p ../dist
           pkgbuild --component target/release/bundle/macos/HackZero\ Device\ Checker.app --install-location /Applications ../dist/HackZero-Device-Checker-macos-arm64.pkg
+          updater="$(find target/release/bundle/macos -name '*.app.tar.gz' -type f | head -n 1)"
+          cp "$updater" ../dist/HackZero-Device-Checker-macos-arm64.app.tar.gz
+          cp "$updater.sig" ../dist/HackZero-Device-Checker-macos-arm64.app.tar.gz.sig
       - uses: anchore/sbom-action@v0
         with: { path: ., format: spdx-json, output-file: dist/HackZero-Device-Checker-macos-arm64.spdx.json, upload-artifact: false, upload-release-assets: false }
       - run: cd dist && shasum -a 256 * > SHA256SUMS-macos-arm64.txt
@@ -91,6 +100,8 @@ jobs:
         with: { node-version: 22, cache: npm, cache-dependency-path: desktop/package-lock.json }
       - name: Prepare resources and build DEB
         shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           sudo apt-get update
@@ -102,9 +113,12 @@ jobs:
           cd desktop; npm ci
           version="${GITHUB_REF_NAME#desktop-v}"
           VERSION="$version" node -e 'const fs=require("fs");const p="src-tauri/tauri.conf.json";const c=JSON.parse(fs.readFileSync(p));c.version=process.env.VERSION;fs.writeFileSync(p,JSON.stringify(c,null,2))'
-          npx tauri build --bundles deb
+          npx tauri build --bundles deb,appimage
           mkdir -p ../dist
           cp target/release/bundle/deb/*.deb ../dist/hackzero-device-checker-linux-amd64.deb
+          updater="$(find target/release/bundle/appimage -name '*.AppImage' -type f | head -n 1)"
+          cp "$updater" ../dist/hackzero-device-checker-linux-amd64.AppImage
+          cp "$updater.sig" ../dist/hackzero-device-checker-linux-amd64.AppImage.sig
       - uses: anchore/sbom-action@v0
         with: { path: ., format: spdx-json, output-file: dist/hackzero-device-checker-linux-amd64.spdx.json, upload-artifact: false, upload-release-assets: false }
       - run: cd dist && sha256sum * > SHA256SUMS-linux-amd64.txt
@@ -119,6 +133,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with: { path: release }
+      - name: Write the signed updater manifest
+        run: node scripts/write-updater-manifest.mjs release
       - run: find release -name 'SHA256SUMS-*.txt' -type f -print0 | sort -z | xargs -0 cat > release/SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2
         with:

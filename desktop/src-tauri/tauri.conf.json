@@ -5,9 +5,16 @@
   "identifier": "ai.hackzero.devicechecker",
   "build": { "beforeDevCommand": "npm run frontend:dev", "beforeBuildCommand": "npm run frontend:build", "devUrl": "http://127.0.0.1:45873", "frontendDist": "../dist" },
   "app": { "windows": [{ "label": "main", "title": "HackZero Device Checker", "width": 860, "height": 690, "minWidth": 700, "minHeight": 560, "resizable": true }], "security": { "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost;" } },
-  "bundle": { "active": true, "targets": "all", "resources": {
+  "bundle": { "active": true, "targets": "all", "icon": ["icons/icon.ico", "icons/icon.icns", "icons/128x128.png"], "createUpdaterArtifacts": true, "resources": {
     "../../bin/device-checker-windows-amd64.exe": "device-checker-windows-amd64.exe",
     "../../bin/device-checker-macos-arm64": "device-checker-macos-arm64",
     "../../bin/device-checker-linux-amd64": "device-checker-linux-amd64"
-  } }
+  } },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEIzQTczODA5RTVGRjYyQ0QKUldUTll2L2xDVGluczhaWWlzcnZlaUNnbUNzQUw0Qi94L0V0QXorSnl4MENkUzkyeEJ1VEUrbVcK",
+      "endpoints": ["https://github.com/cruzryan/hackzero-device-checker/releases/latest/download/latest.json"],
+      "windows": { "installMode": "passive" }
+    }
+  }
 }
