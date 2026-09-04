@@ -163,10 +163,15 @@ async fn connect_hackzero(app: tauri::AppHandle) -> Result<Connection, String> {
 }
 
 fn main() {
+    let launch_in_background = std::env::args().any(|arg| arg == "--background");
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .setup(|app| {
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--background"]),
+        ))
+        .setup(move |app| {
             let show = MenuItem::with_id(app, "show", "Open Device Checker", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
@@ -191,7 +196,17 @@ fn main() {
                     _ => {}
                 })
                 .build(app)?;
+            if launch_in_background {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
             Ok(())
+        })
+        .on_window_event(move |window, event| {
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                let _ = window.hide();
+            }
         })
         .invoke_handler(tauri::generate_handler![
             check_now,

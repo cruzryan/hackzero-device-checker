@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Minimum capability for the checker window.",
   "windows": ["main"],
-  "permissions": ["core:default", "opener:default", "updater:default"]
+  "permissions": ["core:default", "opener:default", "updater:default", "autostart:default"]
 }

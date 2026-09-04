@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { enable as enableAutostart } from "@tauri-apps/plugin-autostart";
 
 const labels = {
   disk_encryption: "Disk encryption",
@@ -105,7 +106,11 @@ document.querySelector("#connectHackZero").addEventListener("click", async () =>
   const button = document.querySelector("#connectHackZero");
   button.disabled = true;
   button.textContent = "Waiting for sign in…";
-  try { renderConnection(await invoke("connect_hackzero")); }
+  try {
+    renderConnection(await invoke("connect_hackzero"));
+    // Start with the signed-in user's consent, only after this device is paired.
+    await enableAutostart();
+  }
   catch (error) { button.disabled = false; button.textContent = "Try connecting again"; }
 });
 Promise.all([
