@@ -54,6 +54,17 @@ function renderConnection(connection) {
 }
 
 let availableUpdate = null;
+let backgroundTimer = null;
+
+function startBackgroundChecks() {
+  if (backgroundTimer) return;
+  const tick = () => invoke("background_tick").catch(() => {
+    // Delivery is durable and retried at the next scheduled tick. A network
+    // outage must not turn the local UI or device posture into a failure.
+  });
+  tick();
+  backgroundTimer = window.setInterval(tick, 60 * 60 * 1000);
+}
 
 async function checkForUpdate() {
   const target = document.querySelector("#updateState");
@@ -110,11 +121,15 @@ document.querySelector("#connectHackZero").addEventListener("click", async () =>
     renderConnection(await invoke("connect_hackzero"));
     // Start with the signed-in user's consent, only after this device is paired.
     await enableAutostart();
+    startBackgroundChecks();
   }
   catch (error) { button.disabled = false; button.textContent = "Try connecting again"; }
 });
 Promise.all([
   refresh(),
-  invoke("connection_status").then(renderConnection),
+  invoke("connection_status").then((connection) => {
+    renderConnection(connection);
+    if (connection?.paired) startBackgroundChecks();
+  }),
   checkForUpdate(),
 ]);

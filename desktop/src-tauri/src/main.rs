@@ -162,6 +162,25 @@ async fn connect_hackzero(app: tauri::AppHandle) -> Result<Connection, String> {
     }).await.map_err(|error| error.to_string())?
 }
 
+#[tauri::command]
+async fn background_tick(app: tauri::AppHandle) -> Result<(), String> {
+    // The Tauri process is the resident, signed tray host. A short-lived child
+    // performs one durable scheduler tick, so there is no second daemon to
+    // manage and no terminal window on any supported desktop platform.
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = Command::new(checker_path(&app))
+            .arg("run")
+            .arg("--once")
+            .output()
+            .map_err(|error| format!("Could not run background check: {error}"))?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        }
+    }).await.map_err(|error| error.to_string())?
+}
+
 fn main() {
     let launch_in_background = std::env::args().any(|arg| arg == "--background");
     tauri::Builder::default()
@@ -204,14 +223,16 @@ fn main() {
             Ok(())
         })
         .on_window_event(move |window, event| {
-            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
                 let _ = window.hide();
             }
         })
         .invoke_handler(tauri::generate_handler![
             check_now,
             connection_status,
-            connect_hackzero
+            connect_hackzero,
+            background_tick
         ])
         .run(tauri::generate_context!())
         .expect("Tauri application error");
