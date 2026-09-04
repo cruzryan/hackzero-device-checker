@@ -1,4 +1,5 @@
 /bin/
+/device-checker
 /dist/
 *.exe
 *.test

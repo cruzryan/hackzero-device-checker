@@ -9,6 +9,17 @@ permissions:
   contents: read
 
 jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          check-latest: true
+      - name: Require gofmt-clean source
+        run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
   test:
     strategy:
       fail-fast: false
@@ -21,6 +32,13 @@ jobs:
         with:
           go-version: stable
           check-latest: true
-      - run: gofmt -d .
-      - run: go vet ./...
+      - run: go test ./...
+  race:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          check-latest: true
       - run: go test -race ./...

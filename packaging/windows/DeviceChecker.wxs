@@ -1,0 +1,19 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="HackZero Device Checker"
+           Manufacturer="HackZero"
+           Version="$(var.ProductVersion)"
+           UpgradeCode="ECBB2F47-87B4-44D5-9C5C-490BB6AC6EFA">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of HackZero Device Checker is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="HackZero Device Checker">
+        <Component Id="CheckerComponent" Guid="*">
+          <File Id="CheckerBinary" Source="$(var.CheckerBinary)" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <Feature Id="MainFeature" Title="HackZero Device Checker" Level="1">
+      <ComponentRef Id="CheckerComponent" />
+    </Feature>
+  </Package>
+</Wix>

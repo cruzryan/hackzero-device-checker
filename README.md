@@ -1,6 +1,6 @@
 # HackZero Device Checker
 
-[![CI](https://github.com/hackzero/device-checker/actions/workflows/ci.yml/badge.svg)](https://github.com/hackzero/device-checker/actions/workflows/ci.yml)
+[![CI](https://github.com/cruzryan/hackzero-device-checker/actions/workflows/ci.yml/badge.svg)](https://github.com/cruzryan/hackzero-device-checker/actions/workflows/ci.yml)
 
 A small, read-only endpoint evidence collector for SOC 2 controls. It checks
 the security posture of a device and sends a signed report to the organization's
@@ -39,6 +39,19 @@ for its normal maintenance window is reported as `needs_attention`, not failed.
 Read the full [threat model](docs/THREAT-MODEL.md), [architecture](docs/ARCHITECTURE.md),
 and [data inventory](docs/PRIVACY.md) before deploying it.
 
+## Verify a release
+
+Every installer is built from its immutable public tag by GitHub
+Actions. Before installing, verify its SHA-256 value and GitHub provenance:
+
+```sh
+gh attestation verify PATH_TO_DOWNLOADED_INSTALLER -R OWNER/REPOSITORY
+```
+
+The [verification guide](docs/VERIFY.md) explains hashes, provenance, and the
+separate platform-signature check. A release is never described as signed or
+notarized until that platform's genuine signing credentials are configured.
+
 ## Development
 
 ```powershell
@@ -50,12 +63,16 @@ go build ./cmd/device-checker
 The production service endpoint is intentionally configurable. Local tests use
 only synthetic probes and never inspect the host running the tests.
 
-## Status
+## Status and packaging
 
 The repository contains the deliberately narrow collector core, report schema,
-and deterministic posture evaluator. OS-native probes and signed packaging are
-released only after the platform-specific verification suites pass; do not use
-an unreleased build as compliance evidence.
+and deterministic posture evaluator. Release CI produces an MSI for Windows,
+a PKG for macOS, and a DEB for Ubuntu/Debian, with a SHA-256 manifest and a
+GitHub provenance attestation for each installer. These early packages install
+the command-line collector only; background service, pairing, reporting, and
+the menu/tray surface are intentionally not claimed as complete.
+
+Do not use an unreleased build as compliance evidence.
 
 ## Contributing and reporting vulnerabilities
 

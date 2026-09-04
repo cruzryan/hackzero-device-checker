@@ -1,0 +1,9 @@
+Package: hackzero-device-checker
+Version: @VERSION@
+Section: admin
+Priority: optional
+Architecture: amd64
+Maintainer: HackZero Security <security@hackzero.ai>
+Description: Read-only endpoint evidence collector for HackZero
+ A small, focused posture collector. It evaluates device security settings
+ locally and has no remote-control or device-management capability.

@@ -1,0 +1,160 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+# Provenance uses GitHub's short-lived OIDC credentials. Platform signing is
+# intentionally absent until its real credentials have been configured.
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-go@v5
+        with: { go-version: stable, check-latest: true }
+      - name: Verify source and test
+        shell: pwsh
+        run: |
+          if ((git rev-parse HEAD) -ne $env:GITHUB_SHA) { throw 'Tag source mismatch' }
+          go test ./...
+      - name: Build payload and MSI
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v').Split('-')[0]
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          go build -trimpath -buildvcs=true -ldflags="-buildid= -X main.version=$env:GITHUB_REF_NAME" -o dist/device-checker.exe ./cmd/device-checker
+          dotnet tool install --global wix --version 5.*
+          $env:PATH += ";$env:USERPROFILE\\.dotnet\\tools"
+          wix build -arch x64 -d CheckerBinary="$PWD\\dist\\device-checker.exe" -d ProductVersion=$version -o dist/HackZero-Device-Checker-windows-amd64.msi packaging/windows/DeviceChecker.wxs
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: dist/HackZero-Device-Checker-windows-amd64.msi
+          format: spdx-json
+          output-file: dist/HackZero-Device-Checker-windows-amd64.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Create hashes
+        shell: pwsh
+        run: |
+          Get-ChildItem dist -File | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name } | Set-Content dist/SHA256SUMS-windows-amd64.txt
+      - name: Attest MSI
+        uses: actions/attest-build-provenance@v2
+        with: { subject-path: dist/HackZero-Device-Checker-windows-amd64.msi }
+      - uses: actions/upload-artifact@v4
+        with: { name: windows; path: dist/; if-no-files-found: error }
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-go@v5
+        with: { go-version: stable, check-latest: true }
+      - name: Verify source and test
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          go test ./...
+      - name: Build payload and PKG
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"; version="${version%%-*}"
+          mkdir -p dist staging/macos/usr/local/bin
+          go build -trimpath -buildvcs=true -ldflags="-buildid= -X main.version=${GITHUB_REF_NAME}" -o staging/macos/usr/local/bin/device-checker ./cmd/device-checker
+          chmod 0755 staging/macos/usr/local/bin/device-checker
+          cp staging/macos/usr/local/bin/device-checker dist/device-checker-macos-arm64
+          pkgbuild --root staging/macos --identifier ai.hackzero.device-checker --version "$version" --install-location / dist/HackZero-Device-Checker-macos-arm64.pkg
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: dist/HackZero-Device-Checker-macos-arm64.pkg
+          format: spdx-json
+          output-file: dist/HackZero-Device-Checker-macos-arm64.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Create hashes
+        run: |
+          cd dist
+          shasum -a 256 * > SHA256SUMS-macos-arm64.txt
+      - name: Attest PKG
+        uses: actions/attest-build-provenance@v2
+        with: { subject-path: dist/HackZero-Device-Checker-macos-arm64.pkg }
+      - uses: actions/upload-artifact@v4
+        with: { name: macos; path: dist/; if-no-files-found: error }
+
+  debian:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-go@v5
+        with: { go-version: stable, check-latest: true }
+      - name: Verify source and test
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          go test ./...
+      - name: Build payload and DEB
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"; version="${version%%-*}"
+          mkdir -p dist staging/debian/DEBIAN staging/debian/usr/bin
+          go build -trimpath -buildvcs=true -ldflags="-buildid= -X main.version=${GITHUB_REF_NAME}" -o staging/debian/usr/bin/device-checker ./cmd/device-checker
+          chmod 0755 staging/debian/usr/bin/device-checker
+          cp staging/debian/usr/bin/device-checker dist/device-checker-linux-amd64
+          sed "s/@VERSION@/${version}/g" packaging/debian/control > staging/debian/DEBIAN/control
+          dpkg-deb --build --root-owner-group staging/debian "dist/hackzero-device-checker_${version}_amd64.deb"
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: dist/*.deb
+          format: spdx-json
+          output-file: dist/hackzero-device-checker-linux-amd64.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Create hashes
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS-linux-amd64.txt
+      - name: Attest DEB
+        uses: actions/attest-build-provenance@v2
+        with: { subject-path: "dist/*.deb" }
+      - uses: actions/upload-artifact@v4
+        with: { name: debian; path: dist/; if-no-files-found: error }
+
+  publish:
+    needs: [windows, macos, debian]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: release }
+      - name: Combine checksums
+        run: |
+          cd release
+          find . -name 'SHA256SUMS-*.txt' -type f -print0 | sort -z | xargs -0 cat > SHA256SUMS.txt
+      - name: Create transparent source-linked release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            ## Verify before installing
+
+            Every installer was built from this immutable tag by the workflow in
+            this repository. Verify the exact downloaded installer before use:
+
+            ```sh
+            gh attestation verify PATH_TO_DOWNLOADED_INSTALLER -R ${{ github.repository }}
+            ```
+
+            Compare its SHA-256 value against `SHA256SUMS.txt`. This release is
+            not represented as code-signed or notarized: platform signing is
+            enabled only after its real signing credentials exist.
+          files: release/**/*

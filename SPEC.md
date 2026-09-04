@@ -174,7 +174,7 @@ Person card:
 
 ```text
 Work device                                      Protected
-Ryan's MacBook Pro · macOS 26
+Example work laptop · macOS 26
 Checked 8 minutes ago
 
 FileVault          On
@@ -306,4 +306,3 @@ It includes:
 The GitHub repository includes a strong `README.md`, license, contribution guidance, security policy, threat model, supported-platform matrix, reproducible-build instructions, release signing information, and test coverage for every supported check.
 
 Do not claim a code-size number until CI calculates it from the released source. Describe the product as small, focused, and auditable instead.
-

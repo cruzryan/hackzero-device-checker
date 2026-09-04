@@ -25,7 +25,10 @@ func main() {
 		// A collection error is not evidence of failure.
 		observation = posture.Observation{}
 	}
-	report := posture.Evaluate(observation, runtime.GOOS, runtime.GOARCH, version, time.Now())
+	// Architecture is intentionally not collected: it is not needed to prove a
+	// posture setting.  `runtime.GOOS` is the honest platform value until each
+	// platform probe supplies an OS release from an authoritative API.
+	report := posture.Evaluate(observation, runtime.GOOS, runtime.GOOS, version, time.Now())
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(report); err != nil {
