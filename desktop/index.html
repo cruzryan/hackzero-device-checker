@@ -1,43 +1,17 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>HackZero Device Checker</title>
-    <link rel="stylesheet" href="/src/style.css" />
-  </head>
+  <head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>HackZero Device Checker</title><link rel="stylesheet" href="/src/style.css" /></head>
   <body>
-    <main class="app-shell">
-      <header class="topbar">
-        <div class="brand"><span class="mark"></span><span>HACKZERO</span><i></i></div>
-        <span class="local">LOCAL DEVICE CHECK</span>
-      </header>
-      <section class="hero">
-        <p class="eyebrow">DEVICE CHECKER <b></b></p>
-        <h1 id="headline">Checking this device</h1>
-        <p id="description">A read-only check of the settings that help protect company data.</p>
-        <section class="connection-card" id="connectionCard" aria-live="polite">
-          <div>
-            <strong id="connectionTitle">Connect this device to HackZero</strong>
-            <p id="connectionDescription">Sign in to send this device's read-only posture record to your workspace.</p>
-          </div>
-          <button class="secondary" id="connectHackZero">Sign in</button>
-        </section>
+    <main class="app-shell unpaired">
+      <header class="globalbar"><div class="brand"><span class="mark"></span><span>HACKZERO</span><i></i></div></header>
+      <div class="atmosphere" aria-hidden="true"><span class="orbit orbit-one"></span><span class="orbit orbit-two"></span><span class="star s1"></span><span class="star s2"></span><span class="star s3"></span><span class="star s4"></span></div>
+      <section class="hero-stage">
+        <div class="intro"><p class="eyebrow">POSTURE / 01</p><h1 id="headline">Checking this device</h1><p id="description">A read-only check of the settings that help protect company data.</p><div class="telemetry"><div><span class="telemetry-icon clock" aria-hidden="true"></span><p>LAST LOCAL CHECK</p><strong id="checkedAt">Checking this device</strong></div><div><span class="telemetry-icon update" aria-hidden="true">↑</span><p>DEVICE CHECKER</p><strong id="updateState">Checking for updates…</strong></div></div></div>
+        <section class="connection-card" id="connectionCard" aria-live="polite"><div class="transmission-art" aria-hidden="true"><i></i><i></i><i></i></div><strong id="connectionTitle">Connect this device to HackZero</strong><span id="connectionDescription">Sign in to send this device's read-only posture record to your workspace.</span><button id="connectHackZero">Connect device <b>→</b></button></section>
       </section>
-      <section aria-label="Device posture" class="posture" id="posture"></section>
-      <footer>
-        <div class="status-copy">
-          <p id="checkedAt">Checking locally...</p>
-          <p class="update-state" id="updateState">Checking release status...</p>
-        </div>
-        <div class="actions">
-          <button class="text-button" id="viewReleases">Releases</button>
-          <button class="secondary" id="openHackZero">Open HackZero</button>
-          <button class="secondary" id="installUpdate" hidden>Install update</button>
-          <button class="primary" id="checkAgain">Check again</button>
-        </div>
-      </footer>
-    </main>
-    <script type="module" src="/src/main.js"></script>
+      <section class="posture-zone" aria-label="Device posture"><div class="posture-heading"><p>SECURITY SIGNALS</p><div class="status-summary"><span></span><strong id="summaryStatus">Checking posture</strong><small id="summaryDetail">Reading local settings…</small></div></div><section class="posture" id="posture"></section></section>
+      <footer><button class="update-action" id="installUpdate" hidden>INSTALL UPDATE</button><button class="check-action" id="checkAgain">CHECK THIS DEVICE <span>↻</span></button></footer>
+      <section class="launch-screen" id="launchScreen" aria-live="polite"><div class="launch-brand"><span class="mark"></span><span>HACKZERO</span><i></i></div><div class="launch-copy"><div class="launch-heading"><div class="launch-loader" aria-hidden="true"><span></span></div><h1 id="launchTitle">Loading HackZero Device Checker</h1></div><p id="launchDescription">This might take a moment.</p><button id="launchRetry" hidden>Try again</button></div></section>
+    </main><script type="module" src="/src/main.js"></script>
   </body>
 </html>

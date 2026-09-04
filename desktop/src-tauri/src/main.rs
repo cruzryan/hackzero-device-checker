@@ -25,6 +25,7 @@ struct Finding {
 #[derive(Serialize)]
 struct Report {
     checked_at: String,
+    platform: String,
     findings: Vec<Finding>,
 }
 
@@ -102,6 +103,11 @@ fn checker_report(app: &tauri::AppHandle) -> Report {
                         .and_then(|x| x.as_str())
                         .unwrap_or("")
                         .to_string(),
+                    platform: json
+                        .get("platform")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .to_string(),
                     findings,
                 };
             }
@@ -109,6 +115,7 @@ fn checker_report(app: &tauri::AppHandle) -> Report {
     }
     Report {
         checked_at: chrono_like_now(),
+        platform: String::new(),
         findings: unavailable_findings(),
     }
 }

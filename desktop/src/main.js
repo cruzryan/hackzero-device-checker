@@ -12,29 +12,70 @@ const labels = {
   endpoint_protection: "Endpoint protection"
 };
 
+// Fixed first-party documentation only. A checker report never provides a URL.
+const remediation = {
+  windows: {
+    disk_encryption: ["Turn on device encryption", "https://support.microsoft.com/en-au/windows/device-encryption-in-windows-cf7e2b6f-3e70-4882-9532-18633605b7df"],
+    screen_lock: ["Set a screen lock", "https://support.microsoft.com/windows/change-the-lock-screen-background-84a4f066-4c62-1c95-87d5-a5a0e8b0c9c5"],
+    automatic_updates: ["Manage Windows Update", "https://support.microsoft.com/windows/update-windows-3c5ae7fc-9fb6-9af7-1984-b5e0412c556a"],
+    pending_updates: ["Install Windows updates", "https://support.microsoft.com/windows/update-windows-3c5ae7fc-9fb6-9af7-1984-b5e0412c556a"],
+    endpoint_protection: ["Open Windows Security", "https://support.microsoft.com/windows/stay-protected-with-the-windows-security-app-2ae0363d-0ada-c064-8b56-6a39afb6a963"]
+  },
+  darwin: {
+    disk_encryption: ["Turn on FileVault", "https://support.apple.com/en-ie/guide/mac-help/-mh11785/mac"],
+    screen_lock: ["Set a screen lock", "https://support.apple.com/en-ie/guide/mac-help/mchlp2270/mac"],
+    automatic_updates: ["Set automatic updates", "https://support.apple.com/en-lamr/guide/mac-help/mchla7037245/mac"],
+    pending_updates: ["Install macOS updates", "https://support.apple.com/en-us/108382"],
+    endpoint_protection: ["Learn about macOS protections", "https://support.apple.com/en-ie/guide/security/sec469d47bd8/web"]
+  },
+  linux: {
+    disk_encryption: ["Learn about disk encryption", "https://documentation.ubuntu.com/desktop/en/latest/explanation/hardware-backed-disk-encryption/"],
+    screen_lock: ["Set a screen lock", "https://help.ubuntu.com/stable/ubuntu-help/session-screenlocks.html.en"],
+    automatic_updates: ["Set automatic updates", "https://documentation.ubuntu.com/security/security-updates/"],
+    pending_updates: ["Install security updates", "https://documentation.ubuntu.com/security/security-updates/"],
+    endpoint_protection: ["Review Ubuntu security", "https://documentation.ubuntu.com/security/security-features/security-features-overview/"]
+  }
+};
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
+}
+
 function statusLabel(status) {
   return { pass: "Protected", fail: "Needs attention", needs_attention: "Needs attention", unknown: "Not available" }[status] || "Not available";
 }
 
 function render(report) {
+  window.latestReportPlatform = report.platform;
   const findings = report.findings || [];
   const hasFailure = findings.some((finding) => finding.status === "fail");
+  const failedCount = findings.filter((finding) => finding.status === "fail").length;
+  const protectedCount = findings.filter((finding) => finding.status === "pass").length;
   document.querySelector("#headline").textContent = hasFailure ? "This device needs attention" : "This device is protected";
   document.querySelector("#description").textContent = hasFailure
     ? "Fix the items below, then check again. We only read these settings; we never change them."
     : "These security settings are on. We only read them; we never change anything on your device.";
+  document.querySelector("#summaryStatus").textContent = hasFailure ? "Action needed" : "Device protected";
+  document.querySelector("#summaryDetail").textContent = hasFailure
+    ? `${failedCount} setting${failedCount === 1 ? "" : "s"} needs attention`
+    : `${protectedCount} protections are on`;
   const checkTime = new Date(report.checked_at);
   document.querySelector("#checkedAt").textContent = Number.isNaN(checkTime.valueOf())
-    ? "Checked locally"
-    : `Checked locally: ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(checkTime)}`;
-  document.querySelector("#posture").innerHTML = findings.map((finding) => `
+    ? "Last checked just now"
+    : `Last checked ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(checkTime)}`;
+  const platformRemediation = remediation[report.platform] || {};
+  document.querySelector("#posture").innerHTML = findings.map((finding) => {
+    const guide = finding.status !== "pass" ? platformRemediation[finding.check] : null;
+    return `
     <article class="finding ${finding.status}">
-      <div><span class="indicator">${finding.status === "pass" ? "✓" : finding.status === "fail" ? "!" : "–"}</span><strong>${labels[finding.check] || finding.check}</strong></div>
-      <div class="result"><span>${statusLabel(finding.status)}</span>${finding.reason ? `<small>${finding.reason.replaceAll("_", " ")}</small>` : ""}</div>
-    </article>`).join("");
+      <div><span class="indicator">${finding.status === "pass" ? "✓" : finding.status === "fail" ? "!" : "–"}</span><strong>${escapeHtml(labels[finding.check] || finding.check)}</strong></div>
+      <div class="result"><span>${statusLabel(finding.status)}</span>${finding.reason ? `<small>${escapeHtml(finding.reason.replaceAll("_", " "))}</small>` : ""}${guide ? `<button class="fix-link" data-remediation="${escapeHtml(finding.check)}">${escapeHtml(guide[0])} ↗</button>` : ""}</div>
+    </article>`;
+  }).join("");
 }
 
 function renderConnection(connection) {
+  document.querySelector(".app-shell").classList.toggle("unpaired", !connection?.paired);
   const action = document.querySelector("#connectHackZero");
   const title = document.querySelector("#connectionTitle");
   const description = document.querySelector("#connectionDescription");
@@ -46,7 +87,7 @@ function renderConnection(connection) {
     title.textContent = "This device is connected";
     description.textContent = `${identity} is sending read-only posture checks to ${connection.workspace_name || "your workspace"}.`;
   } else {
-    action.textContent = "Connect to HackZero";
+    action.innerHTML = "Connect device <b>→</b>";
     action.disabled = false;
     title.textContent = "Connect this device to HackZero";
     description.textContent = "Sign in to send this device's read-only posture record to your workspace.";
@@ -55,6 +96,18 @@ function renderConnection(connection) {
 
 let availableUpdate = null;
 let backgroundTimer = null;
+// Keep the splash visible only in the local Vite preview so its design can be
+// reviewed. Packaged builds dismiss it as soon as the first check completes.
+const keepLaunchVisible = import.meta.env.DEV;
+
+function setLaunchState({ title, description, failed = false, visible = true }) {
+  const screen = document.querySelector("#launchScreen");
+  screen.hidden = !visible;
+  document.querySelector("#launchTitle").textContent = title;
+  document.querySelector("#launchDescription").textContent = description;
+  document.querySelector("#launchRetry").hidden = !failed;
+  screen.classList.toggle("failed", failed);
+}
 
 function startBackgroundChecks() {
   if (backgroundTimer) return;
@@ -69,18 +122,18 @@ function startBackgroundChecks() {
 async function checkForUpdate() {
   const target = document.querySelector("#updateState");
   const install = document.querySelector("#installUpdate");
-  target.textContent = "Checking for signed updates…";
+  target.textContent = "Checking for updates…";
   try {
     availableUpdate = await check();
     if (!availableUpdate) {
-      target.textContent = "You’re on the latest signed release.";
+      target.textContent = "Up to date";
       return;
     }
     target.textContent = `Version ${availableUpdate.version} is ready to install.`;
     install.hidden = false;
   } catch {
     // An update-server outage is never a failed security setting.
-    target.textContent = "Couldn’t check for updates. Try again later.";
+    target.textContent = "Update status unavailable";
   }
 }
 
@@ -100,33 +153,70 @@ async function installAvailableUpdate() {
   }
 }
 
-async function refresh() {
+async function refresh({ initial = false } = {}) {
   const button = document.querySelector("#checkAgain");
+  if (initial) {
+    setLaunchState({
+      title: "Loading HackZero Device Checker",
+      description: "This might take a moment."
+    });
+  }
   button.disabled = true;
   button.textContent = "Checking…";
-  try { render(await invoke("check_now")); }
-  catch { document.querySelector("#headline").textContent = "Could not check this device"; }
+  try {
+    render(await invoke("check_now"));
+    if (initial && !keepLaunchVisible) setLaunchState({ visible: false, title: "", description: "" });
+  }
+  catch {
+    document.querySelector("#headline").textContent = "Could not check this device";
+    if (initial) {
+      setLaunchState({
+        title: "Something went wrong",
+        description: "We could not start the local device check. Try again, or close and reopen Device Checker.",
+        failed: true
+      });
+    }
+  }
   finally { button.disabled = false; button.textContent = "Check again"; }
 }
 
 document.querySelector("#checkAgain").addEventListener("click", refresh);
-document.querySelector("#openHackZero").addEventListener("click", () => openUrl("https://hackzero.ai"));
-document.querySelector("#viewReleases").addEventListener("click", () => openUrl("https://github.com/cruzryan/hackzero-device-checker/releases"));
+document.querySelector("#posture").addEventListener("click", (event) => {
+  const check = event.target.closest("[data-remediation]")?.dataset.remediation;
+  const platform = window.latestReportPlatform;
+  const guide = check && remediation[platform]?.[check];
+  if (guide) openUrl(guide[1]);
+});
+document.querySelector("#launchRetry").addEventListener("click", () => refresh({ initial: true }));
+document.querySelector("#openHackZero")?.addEventListener("click", () => openUrl("https://hackzero.ai"));
+document.querySelector("#viewReleases")?.addEventListener("click", () => openUrl("https://github.com/cruzryan/hackzero-device-checker/releases"));
 document.querySelector("#installUpdate").addEventListener("click", installAvailableUpdate);
 document.querySelector("#connectHackZero").addEventListener("click", async () => {
   const button = document.querySelector("#connectHackZero");
+  const title = document.querySelector("#connectionTitle");
+  const description = document.querySelector("#connectionDescription");
   button.disabled = true;
-  button.textContent = "Waiting for sign in…";
+  button.innerHTML = "Waiting for approval <b>•</b>";
+  title.textContent = "Continue in your browser";
+  description.textContent = "A secure approval page is opening in your default browser. Approve this device there, then return here.";
   try {
     renderConnection(await invoke("connect_hackzero"));
     // Start with the signed-in user's consent, only after this device is paired.
     await enableAutostart();
     startBackgroundChecks();
   }
-  catch (error) { button.disabled = false; button.textContent = "Try connecting again"; }
+  catch (error) {
+    console.error("Device Checker pairing failed", error);
+    button.disabled = false;
+    button.innerHTML = "Try again <b>→</b>";
+    title.textContent = "Could not start sign in";
+    // Never display a server response or internal error to the person using
+    // the app. Those responses can include proxy HTML and security details.
+    description.textContent = "We couldn't open the secure approval page. Check your connection and try again.";
+  }
 });
 Promise.all([
-  refresh(),
+  refresh({ initial: true }),
   invoke("connection_status").then((connection) => {
     renderConnection(connection);
     if (connection?.paired) startBackgroundChecks();

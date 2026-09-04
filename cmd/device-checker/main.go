@@ -149,7 +149,7 @@ func pairDevice(args []string) {
 	if err != nil {
 		fatal(err)
 	}
-	payload := map[string]string{"device_id": device.ID, "public_key": device.PublicKey, "platform": runtime.GOOS, "device_name": *name, "redirect_uri": callbackURL, "state": session.State}
+	payload := map[string]string{"device_id": device.ID, "public_key": device.PublicKey, "platform": runtime.GOOS, "device_name": *name, "redirect_uri": callbackURL, "state": session.State, "code_challenge": session.Challenge()}
 	var started struct {
 		ApprovalURL string `json:"approval_url"`
 	}
@@ -174,7 +174,7 @@ func pairDevice(args []string) {
 		WorkspaceName string `json:"workspace_name"`
 		PersonName    string `json:"person_name"`
 	}
-	if err := postJSON(trimServer(*server)+"/api/trust/device-checker/exchange", map[string]string{"code": result.Code, "device_id": device.ID}, &completed); err != nil {
+	if err := postJSON(trimServer(*server)+"/api/trust/device-checker/exchange", map[string]string{"code": result.Code, "device_id": device.ID, "code_verifier": session.Verifier}, &completed); err != nil {
 		fatal(err)
 	}
 	if completed.ReportURL == "" {
