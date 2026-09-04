@@ -6,8 +6,9 @@ The checker is designed around four local components:
    set of operating-system security signals.
 2. **Evaluator** — pure Go maps raw observations to `pass`, `fail`, or
    `needs_attention`. This is deterministic and independently unit tested.
-3. **Identity** — browser pairing uses OAuth authorization-code + PKCE. The
-   resulting device credential is bound to a locally generated key pair.
+3. **Identity** — browser pairing uses a short-lived, one-time approval
+   code and a locally generated key pair. The browser session never enters the
+   client.
 4. **Reporter** — sends a signed report over HTTPS and queues it locally when
    offline. It has no inbound listener after pairing completes.
 

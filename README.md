@@ -4,9 +4,9 @@
 
 A small, read-only endpoint evidence collector for SOC 2 controls. It checks
 the security posture of a device. The repository also contains tested building
-blocks for per-device signatures, PKCE pairing values, scheduling, and a
-bounded offline queue; the hosted pairing and reporting contract is not
-published yet, so installers do not activate those building blocks.
+blocks for per-device signatures, one-time browser pairing, scheduling, and a
+bounded offline queue. The desktop app pairs only after the user approves it
+in their signed-in browser; it never receives or stores that browser session.
 
 It is **not** an MDM, remote-control tool, asset tracker, keystroke logger, or
 browser extension. It does not enforce settings, inspect documents, collect
@@ -31,8 +31,8 @@ for its normal maintenance window is reported as `needs_attention`, not failed.
   signal outcomes, and timestamps.
 - The client creates a per-device key pair. It never persists a browser cookie,
   user password, API token, or OAuth refresh token.
-- Pairing uses browser OAuth with authorization-code + PKCE and an ephemeral
-  loopback listener bound to `127.0.0.1`.
+- Pairing uses a short-lived, single-use approval code, an unpredictable local
+  state value, and an ephemeral loopback listener bound to `127.0.0.1`.
 - Reports are outbound HTTPS only. The client listens on no permanent port and
   accepts no remote commands.
 - A device that is offline or powered off is **not failed**. The service treats
@@ -86,14 +86,12 @@ only synthetic probes and never inspect the host running the tests.
 
 The repository contains the deliberately narrow collector core, report schema,
 deterministic posture evaluator, and unit-tested local security primitives.
-Release CI produces an MSI for Windows,
-a PKG for macOS, and a DEB for Ubuntu/Debian, with a SHA-256 manifest and a
-GitHub provenance attestation for each installer. These early packages install
-the command-line collector only; background service, pairing, reporting, and
-the menu/tray surface are intentionally not claimed as complete. In particular,
-the current preview does not pair to a workspace or upload evidence. Do not run
-it as a background service until the hosted protocol and platform credential
-storage implementations are released and independently reviewed.
+Release CI produces an MSI for Windows, a PKG for macOS, and a DEB for
+Ubuntu/Debian, with a SHA-256 manifest and a GitHub provenance attestation for
+each installer. The desktop app contains the tray surface, local checks, and
+browser-mediated pairing flow. Release artifacts are only described as
+platform-signed or notarized after the corresponding platform credentials have
+been configured and verified.
 
 Do not use an unreleased build as compliance evidence.
 

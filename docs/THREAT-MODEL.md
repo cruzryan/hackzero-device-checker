@@ -10,8 +10,9 @@
 
 | Threat | Mitigation |
 | --- | --- |
-| Stolen web session | Pairing uses short-lived code + PKCE; no web session is stored by the client. |
-| Report replay or modification | Every report carries nonce, collection time, and an Ed25519 signature verified server-side. |
+| Stolen web session | Pairing needs an approval in the signed-in browser, but the client receives only a short-lived, single-use pairing code; no web session is stored by the client. |
+| Report modification | Each envelope has an Ed25519 signature verified against the key registered for that device. |
+| Report replay | The service retains a digest of every accepted signed envelope and rejects a duplicate for the same device. |
 | Local process impersonation | Pairing callback binds only to loopback with random state; the user verifies the organization in the browser. |
 | Offline device | Queue signed reports; surface stale state separately, never invent a failure. |
 | Overcollection | Fixed allowlist schema; no generic command, shell, inventory, or telemetry API. |
