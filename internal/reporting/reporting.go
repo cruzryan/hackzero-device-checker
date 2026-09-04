@@ -15,6 +15,7 @@ import (
 // tenant assignment, and freshness are intentionally service-side concepts.
 type Envelope struct {
 	SchemaVersion int            `json:"schema_version"`
+	Kind          string         `json:"kind"`
 	DeviceID      string         `json:"device_id"`
 	PublicKey     string         `json:"public_key"`
 	CreatedAt     time.Time      `json:"created_at"`
@@ -24,6 +25,7 @@ type Envelope struct {
 
 type unsignedEnvelope struct {
 	SchemaVersion int            `json:"schema_version"`
+	Kind          string         `json:"kind"`
 	DeviceID      string         `json:"device_id"`
 	PublicKey     string         `json:"public_key"`
 	CreatedAt     time.Time      `json:"created_at"`
@@ -32,7 +34,17 @@ type unsignedEnvelope struct {
 
 // NewEnvelope serializes a stable unsigned representation before signing it.
 func NewEnvelope(device identity.Device, report posture.Report, at time.Time) (Envelope, error) {
-	plain := unsignedEnvelope{1, device.ID, device.PublicKey, at.UTC(), report}
+	return newEnvelope(device, "full", report, at)
+}
+
+// NewHeartbeat makes a small signed liveness signal. It carries no posture
+// result, so a heartbeat can never fabricate a passed daily check.
+func NewHeartbeat(device identity.Device, at time.Time) (Envelope, error) {
+	return newEnvelope(device, "heartbeat", posture.Report{SchemaVersion: 1}, at)
+}
+
+func newEnvelope(device identity.Device, kind string, report posture.Report, at time.Time) (Envelope, error) {
+	plain := unsignedEnvelope{1, kind, device.ID, device.PublicKey, at.UTC(), report}
 	payload, err := json.Marshal(plain)
 	if err != nil {
 		return Envelope{}, fmt.Errorf("marshal report: %w", err)
@@ -41,13 +53,16 @@ func NewEnvelope(device identity.Device, report posture.Report, at time.Time) (E
 	if err != nil {
 		return Envelope{}, fmt.Errorf("sign report: %w", err)
 	}
-	return Envelope{plain.SchemaVersion, plain.DeviceID, plain.PublicKey, plain.CreatedAt, plain.Report, signature}, nil
+	return Envelope{plain.SchemaVersion, plain.Kind, plain.DeviceID, plain.PublicKey, plain.CreatedAt, plain.Report, signature}, nil
 }
 
 // Verify checks the exact canonical payload locally. Production services must
 // additionally bind the known public key and device ID to an authorized tenant.
 func (e Envelope) Verify() bool {
-	plain := unsignedEnvelope{e.SchemaVersion, e.DeviceID, e.PublicKey, e.CreatedAt, e.Report}
+	if e.Kind != "full" && e.Kind != "heartbeat" {
+		return false
+	}
+	plain := unsignedEnvelope{e.SchemaVersion, e.Kind, e.DeviceID, e.PublicKey, e.CreatedAt, e.Report}
 	payload, err := json.Marshal(plain)
 	if err != nil {
 		return false

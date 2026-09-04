@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/hackzero/device-checker/internal/agent"
 	"github.com/hackzero/device-checker/internal/identity"
 	"github.com/hackzero/device-checker/internal/pairing"
 	"github.com/hackzero/device-checker/internal/posture"
@@ -34,7 +35,9 @@ func main() {
 	case "pair":
 		pairDevice(os.Args[2:])
 	case "report":
-		sendReport(os.Args[2:])
+		runAgent(true, os.Args[2:])
+	case "run":
+		runAgent(false, os.Args[2:])
 	case "connection":
 		printConnection()
 	default:
@@ -43,7 +46,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: device-checker <status|pair|report>")
+	fmt.Fprintln(os.Stderr, "usage: device-checker <status|pair|report|run|connection>")
 	os.Exit(2)
 }
 
@@ -193,33 +196,68 @@ func printConnection() {
 }
 
 func sendReport(args []string) {
-	_ = args
+	runAgent(true, args)
+}
+
+type reportSender struct{ url string }
+
+func (s reportSender) Send(ctx context.Context, envelope reporting.Envelope) error {
+	return postJSONContext(ctx, s.url, envelope, &map[string]any{})
+}
+
+func agentStatePath() string { return filepath.Join(filepath.Dir(statePath()), "agent-state.json") }
+func spoolPath() string      { return filepath.Join(filepath.Dir(statePath()), "queue") }
+
+func configuredRunner() (agent.Runner, error) {
 	state, err := loadState()
 	if err != nil {
-		fatal(err)
+		return agent.Runner{}, err
 	}
-	observation, err := probe.Collect()
+	return agent.Runner{
+		Device:    state.Identity,
+		Collector: probe.Collect,
+		Sender:    reportSender{url: state.ReportURL},
+		Spool:     reporting.Spool{Directory: spoolPath(), MaxItems: 96},
+		StatePath: agentStatePath(),
+		Version:   version,
+	}, nil
+}
+
+// run starts the durable background loop. Service managers start this command
+// at boot; `run --once` is useful to test the installed runtime without a
+// resident process. `report` remains a convenient one-shot Check now alias.
+func runAgent(forceFull bool, args []string) {
+	flags := flag.NewFlagSet("run", flag.ExitOnError)
+	once := flags.Bool("once", false, "run one scheduling tick and exit")
+	_ = flags.Parse(args)
+	runner, err := configuredRunner()
 	if err != nil {
-		observation = posture.Observation{}
-	}
-	report := posture.Evaluate(observation, runtime.GOOS, runtime.GOOS, version, time.Now())
-	envelope, err := reporting.NewEnvelope(state.Identity, report, time.Now())
-	if err != nil {
 		fatal(err)
 	}
-	var accepted map[string]any
-	if err := postJSON(state.ReportURL, envelope, &accepted); err != nil {
-		fatal(err)
+	for {
+		due, err := runner.Tick(context.Background(), forceFull)
+		if err != nil {
+			fatal(err)
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"full_report_due": due.FullReport, "heartbeat_due": due.Heartbeat})
+		if *once || forceFull {
+			return
+		}
+		forceFull = false
+		time.Sleep(time.Minute)
 	}
-	_ = json.NewEncoder(os.Stdout).Encode(accepted)
 }
 
 func postJSON(url string, input, output any) error {
+	return postJSONContext(context.Background(), url, input, output)
+}
+
+func postJSONContext(ctx context.Context, url string, input, output any) error {
 	body, err := json.Marshal(input)
 	if err != nil {
 		return err
 	}
-	request, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -235,7 +273,11 @@ func postJSON(url string, input, output any) error {
 		data, _ := io.ReadAll(limited)
 		return fmt.Errorf("server returned %s: %s", response.Status, string(data))
 	}
-	return json.NewDecoder(limited).Decode(output)
+	err = json.NewDecoder(limited).Decode(output)
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	return err
 }
 
 func trimServer(server string) string {

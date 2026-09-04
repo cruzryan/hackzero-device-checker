@@ -16,10 +16,15 @@ macOS menu-bar item, and Linux tray indicator where the desktop supports one.
 The detailed device view belongs in the web product, linked from the People
 screen. A command-line status view remains available on headless Linux.
 
-The current preview implements the read-only probe/evaluator plus independently
-tested local key, report-envelope, PKCE, queue, and scheduling primitives. It
-does not yet enable browser pairing, persistent service mode, or network
-delivery. Once the reviewed service integration ships, scans run after install,
-at boot, daily, and when a user selects Check now. A lightweight heartbeat runs
-roughly every six hours. Server receipt time drives freshness; no signal becomes
-a failure merely because a device was asleep or offline.
+The runtime now has an explicit `device-checker run` mode. It retries verified
+queued envelopes first, performs the full check at most once every 24 hours,
+and sends a small signed heartbeat at most once every six hours. `report` is a
+one-shot forced full check. Both report kinds are queued atomically while
+offline, with bounded local storage. A heartbeat cannot replace a full posture
+report. Server receipt time drives freshness; no signal becomes a failure just
+because a device was asleep or offline.
+
+The service endpoint remains intentionally narrow: pairing provides a report
+URL and the runtime sends only signed report envelopes to that URL. The server
+must verify the registered public key, device assignment, and authorization;
+the agent does not accept remote commands.

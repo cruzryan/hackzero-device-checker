@@ -1,0 +1,17 @@
+[Unit]
+Description=HackZero Device Checker (read-only device posture)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/device-checker run
+Restart=on-failure
+RestartSec=60
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target
