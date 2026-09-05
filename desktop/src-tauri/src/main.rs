@@ -232,7 +232,7 @@ fn main() {
                         .expect("application icon is bundled")
                         .clone(),
                 )
-                .tooltip("HackZero Device Checker — local checks active")
+                .tooltip("HackZero Device Checker")
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {

@@ -27,7 +27,14 @@ func collect() (posture.Observation, error) {
 }
 
 const windowsScript = `$ErrorActionPreference='SilentlyContinue'
-$bitlocker=(Get-BitLockerVolume -MountPoint $env:SystemDrive).ProtectionStatus -eq 'On'
+# Get-BitLockerVolume requires elevation on some Windows editions, including
+# machines using the Settings "Device encryption" surface. Never turn that
+# access error into an invented false value: absent evidence remains null.
+$bitlocker=$null
+try {
+  $volume=Get-BitLockerVolume -MountPoint $env:SystemDrive -ErrorAction Stop
+  if ($null -ne $volume) { $bitlocker=($volume.ProtectionStatus -eq 'On') }
+} catch {}
 $timeout=(Get-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name ScreenSaveTimeOut).ScreenSaveTimeOut
 $screenSaver=(Get-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name ScreenSaveActive).ScreenSaveActive -eq '1'
 $update=(Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name NoAutoUpdate).NoAutoUpdate -ne 1

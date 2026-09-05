@@ -8,7 +8,6 @@ const labels = {
   disk_encryption: "Disk encryption",
   screen_lock: "Screen lock",
   automatic_updates: "Automatic updates",
-  pending_updates: "Pending updates",
   endpoint_protection: "Endpoint protection"
 };
 
@@ -16,23 +15,20 @@ const labels = {
 const remediation = {
   windows: {
     disk_encryption: ["Turn on device encryption", "https://support.microsoft.com/en-au/windows/device-encryption-in-windows-cf7e2b6f-3e70-4882-9532-18633605b7df"],
-    screen_lock: ["Set a screen lock", "https://support.microsoft.com/windows/change-the-lock-screen-background-84a4f066-4c62-1c95-87d5-a5a0e8b0c9c5"],
-    automatic_updates: ["Manage Windows Update", "https://support.microsoft.com/windows/update-windows-3c5ae7fc-9fb6-9af7-1984-b5e0412c556a"],
-    pending_updates: ["Install Windows updates", "https://support.microsoft.com/windows/update-windows-3c5ae7fc-9fb6-9af7-1984-b5e0412c556a"],
+    screen_lock: ["Set a screen lock", "https://support.microsoft.com/en-us/windows/configure-a-screen-saver-in-windows-a9dc2a0c-dc8e-9161-d270-aaccc252082a"],
+    automatic_updates: ["Manage Windows Update", "https://support.microsoft.com/en-us/windows/install-windows-updates-3c5ae7fc-9fb6-9af1-1984-b5e0412c556a"],
     endpoint_protection: ["Open Windows Security", "https://support.microsoft.com/windows/stay-protected-with-the-windows-security-app-2ae0363d-0ada-c064-8b56-6a39afb6a963"]
   },
   darwin: {
     disk_encryption: ["Turn on FileVault", "https://support.apple.com/en-ie/guide/mac-help/-mh11785/mac"],
     screen_lock: ["Set a screen lock", "https://support.apple.com/en-ie/guide/mac-help/mchlp2270/mac"],
     automatic_updates: ["Set automatic updates", "https://support.apple.com/en-lamr/guide/mac-help/mchla7037245/mac"],
-    pending_updates: ["Install macOS updates", "https://support.apple.com/en-us/108382"],
     endpoint_protection: ["Learn about macOS protections", "https://support.apple.com/en-ie/guide/security/sec469d47bd8/web"]
   },
   linux: {
     disk_encryption: ["Learn about disk encryption", "https://documentation.ubuntu.com/desktop/en/latest/explanation/hardware-backed-disk-encryption/"],
     screen_lock: ["Set a screen lock", "https://help.ubuntu.com/stable/ubuntu-help/session-screenlocks.html.en"],
     automatic_updates: ["Set automatic updates", "https://documentation.ubuntu.com/security/security-updates/"],
-    pending_updates: ["Install security updates", "https://documentation.ubuntu.com/security/security-updates/"],
     endpoint_protection: ["Review Ubuntu security", "https://documentation.ubuntu.com/security/security-features/security-features-overview/"]
   }
 };
@@ -47,7 +43,10 @@ function statusLabel(status) {
 
 function render(report) {
   window.latestReportPlatform = report.platform;
-  const findings = report.findings || [];
+  // Pending updates are maintenance timing, not an AC-12 requirement. Keep
+  // them out of the person-facing posture score so the evaluated controls are
+  // exactly encryption, lock, automatic updates, and endpoint protection.
+  const findings = (report.findings || []).filter((finding) => finding.check !== "pending_updates");
   const hasFailure = findings.some((finding) => finding.status === "fail");
   const failedCount = findings.filter((finding) => finding.status === "fail").length;
   const protectedCount = findings.filter((finding) => finding.status === "pass").length;
@@ -65,11 +64,13 @@ function render(report) {
     : `Last checked ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(checkTime)}`;
   const platformRemediation = remediation[report.platform] || {};
   document.querySelector("#posture").innerHTML = findings.map((finding) => {
-    const guide = finding.status !== "pass" ? platformRemediation[finding.check] : null;
+    // An unreadable local signal is not an instruction to change a setting.
+    // Only an affirmative failed check receives a remediation link.
+    const guide = finding.status === "fail" ? platformRemediation[finding.check] : null;
     return `
     <article class="finding ${finding.status}">
-      <div><span class="indicator">${finding.status === "pass" ? "✓" : finding.status === "fail" ? "!" : "–"}</span><strong>${escapeHtml(labels[finding.check] || finding.check)}</strong></div>
-      <div class="result"><span>${statusLabel(finding.status)}</span>${finding.reason ? `<small>${escapeHtml(finding.reason.replaceAll("_", " "))}</small>` : ""}${guide ? `<button class="fix-link" data-remediation="${escapeHtml(finding.check)}">${escapeHtml(guide[0])} ↗</button>` : ""}</div>
+      <div class="finding-title"><span class="indicator">${finding.status === "pass" ? "✓" : finding.status === "fail" ? "!" : "–"}</span><strong>${escapeHtml(labels[finding.check] || finding.check)}</strong><span class="status-pill">${statusLabel(finding.status)}</span></div>
+      <div class="result">${finding.reason ? `<small>${escapeHtml(finding.reason.replaceAll("_", " "))}</small>` : ""}${guide ? `<button class="fix-link" data-remediation="${escapeHtml(finding.check)}">${escapeHtml(guide[0])} →</button>` : ""}</div>
     </article>`;
   }).join("");
 }
@@ -98,7 +99,9 @@ let availableUpdate = null;
 let backgroundTimer = null;
 // Keep the splash visible only in the local Vite preview so its design can be
 // reviewed. Packaged builds dismiss it as soon as the first check completes.
-const keepLaunchVisible = import.meta.env.DEV;
+// Local review uses the same flow as a packaged app.  This is intentionally
+// kept uncommitted; production already dismisses the splash after first check.
+const keepLaunchVisible = false;
 
 function setLaunchState({ title, description, failed = false, visible = true }) {
   const screen = document.querySelector("#launchScreen");

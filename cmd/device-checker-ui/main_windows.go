@@ -1,20 +1,19 @@
 //go:build windows
 
-// device-checker-ui is deliberately a native, lightweight status surface. It
-// uses WPF already present on supported Windows versions; no browser runtime,
-// Electron bundle, or embedded account credential is needed.
+// device-checker-ui presents local posture through a short-lived loopback
+// page. It deliberately binds only to 127.0.0.1, opens the user's normal
+// browser, and has no network listener after its short preview lifetime.
 package main
 
 import (
-	"encoding/base64"
+	"context"
 	"encoding/json"
-	"fmt"
-	"os"
+	"net"
+	"net/http"
 	"os/exec"
 	"runtime"
 	"strings"
 	"time"
-	"unicode/utf16"
 
 	"github.com/hackzero/device-checker/internal/posture"
 	"github.com/hackzero/device-checker/internal/probe"
@@ -36,21 +35,49 @@ type screenModel struct {
 }
 
 func main() {
-	model := collect()
-	payload, err := json.Marshal(model)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		panic(err)
+		return
 	}
-	// Data travels as base64 JSON so a device-provided value is never treated as
-	// PowerShell source. The only script executed is the constant below.
-	encoded := base64.StdEncoding.EncodeToString(utf16LE("& { param($json) " + windowsForm + " } '" + base64.StdEncoding.EncodeToString(payload) + "'"))
-	command := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded)
-	if executable, executableErr := os.Executable(); executableErr == nil {
-		command.Env = append(os.Environ(), "HACKZERO_DEVICE_CHECKER_UI_PATH="+executable)
+	defer listener.Close()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", servePage)
+	mux.HandleFunc("/api/status", serveStatus)
+	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	url := "http://" + listener.Addr().String()
+	// rundll32 delegates to the user's default browser and does not create a
+	// terminal. It receives no credentials and no report data in the URL.
+	if err := exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", url).Start(); err != nil {
+		return
 	}
-	if err := command.Run(); err != nil {
-		panic(fmt.Errorf("open status window: %w", err))
+	go func() { _ = server.Serve(listener) }()
+	// This is a temporary local UI, not an agent listener. The installed tray
+	// experience will own its own lifecycle; this preview exits after 15 minutes.
+	<-time.After(15 * time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = server.Shutdown(ctx)
+}
+
+func servePage(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
 	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write([]byte(page))
+}
+
+func serveStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(collect())
 }
 
 func collect() screenModel {
@@ -63,17 +90,11 @@ func collect() screenModel {
 		label  string
 		signal posture.Signal
 	}{
-		{"Disk encryption", report.DiskEncryption},
-		{"Screen lock", report.ScreenLock},
-		{"Automatic updates", report.AutomaticUpdates},
-		{"Pending updates", report.PendingMaintenance},
+		{"Disk encryption", report.DiskEncryption}, {"Screen lock", report.ScreenLock},
+		{"Automatic updates", report.AutomaticUpdates}, {"Pending updates", report.PendingMaintenance},
 		{"Endpoint protection", report.EndpointProtection},
 	}
-	model := screenModel{
-		Title:       "Your device, in view.",
-		Description: "A private, read-only check of the security settings that protect your work.",
-		CheckedAt:   "Checked on this device · " + report.CollectedAt.Local().Format("Jan 2, 2006 at 3:04 PM"),
-	}
+	model := screenModel{Title: "Your device, in view.", Description: "A private, read-only check of the security settings that protect your work.", CheckedAt: "Checked on this device · " + report.CollectedAt.Local().Format("Jan 2, 2006 at 3:04 PM")}
 	for _, item := range signals {
 		model.Rows = append(model.Rows, screenRow{Label: item.label, Value: displaySignal(item.signal), Status: string(item.signal.Status)})
 	}
@@ -93,69 +114,6 @@ func displaySignal(signal posture.Signal) string {
 	}
 }
 
-func utf16LE(value string) []byte {
-	encoded := utf16.Encode([]rune(value))
-	bytes := make([]byte, len(encoded)*2)
-	for index, value := range encoded {
-		bytes[index*2], bytes[index*2+1] = byte(value), byte(value>>8)
-	}
-	return bytes
-}
-
-const windowsForm = `
-Add-Type -AssemblyName PresentationFramework
-Add-Type -AssemblyName PresentationCore
-Add-Type -AssemblyName WindowsBase
-$data = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($json)) | ConvertFrom-Json
-[xml]$xaml = @'
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="HackZero Device Checker" Width="820" Height="690" WindowStartupLocation="CenterScreen"
-        Background="#F8F6F2" ResizeMode="NoResize" FontFamily="Segoe UI">
-  <Border Margin="14" BorderBrush="#DED9D0" BorderThickness="1" Background="#FFFDFC" CornerRadius="3">
-    <Grid Margin="42,34,42,32">
-      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-      <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-      <StackPanel Grid.Row="0" Grid.Column="0">
-        <StackPanel Orientation="Horizontal"><TextBlock Text="HACKZERO" FontSize="12" FontWeight="SemiBold" Foreground="#171717"/><Ellipse Width="7" Height="7" Margin="8,5,0,0" Fill="#2785D7"/></StackPanel>
-        <TextBlock x:Name="Heading" Margin="0,30,0,8" FontFamily="Georgia" FontSize="42" Foreground="#151515"/>
-        <TextBlock x:Name="Description" Width="570" FontSize="16" Foreground="#595653" TextWrapping="Wrap" LineHeight="25"/>
-      </StackPanel>
-      <Border Grid.Row="0" Grid.Column="1" Background="#E9F4EC" BorderBrush="#BEDAC6" BorderThickness="1" CornerRadius="20" Padding="14,7" VerticalAlignment="Top"><TextBlock Text="READ-ONLY" FontSize="11" FontWeight="SemiBold" Foreground="#28653B"/></Border>
-      <StackPanel x:Name="Checks" Grid.Row="2" Grid.ColumnSpan="2" Margin="0,34,0,24"/>
-      <Grid Grid.Row="3" Grid.ColumnSpan="2"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-        <TextBlock x:Name="CheckedAt" VerticalAlignment="Center" FontSize="13" Foreground="#77716C"/>
-        <Button x:Name="Refresh" Grid.Column="1" Content="Check again" Padding="20,10" Margin="0,0,14,0" Background="#FFFDFC" BorderBrush="#181818" BorderThickness="1" Foreground="#171717" FontSize="14" Cursor="Hand"/>
-        <Button x:Name="Connect" Grid.Column="2" Content="Connect to HackZero  →" Padding="20,10" Background="#171717" BorderBrush="#171717" Foreground="White" FontSize="14" Cursor="Hand"/>
-      </Grid>
-    </Grid>
-  </Border>
-</Window>
-'@
-$reader = New-Object System.Xml.XmlNodeReader $xaml
-$window = [Windows.Markup.XamlReader]::Load($reader)
-$window.FindName('Heading').Text = $data.Title
-$window.FindName('Description').Text = $data.Description
-$window.FindName('CheckedAt').Text = $data.CheckedAt
-$checks = $window.FindName('Checks')
-foreach ($row in $data.Rows) {
-  $card = New-Object Windows.Controls.Border
-  $card.BorderBrush = [Windows.Media.Brushes]::Transparent; $card.BorderThickness = '1'; $card.CornerRadius = '3'; $card.Margin = '0,0,0,9'; $card.Padding = '20,15'
-  if ($row.Status -eq 'pass') { $card.Background = [Windows.Media.BrushConverter]::new().ConvertFromString('#F2F7F3') } elseif ($row.Status -eq 'unknown') { $card.Background = [Windows.Media.BrushConverter]::new().ConvertFromString('#F4F1ED') } else { $card.Background = [Windows.Media.BrushConverter]::new().ConvertFromString('#FFF1EF') }
-  $grid = New-Object Windows.Controls.Grid
-  $left = New-Object Windows.Controls.TextBlock; $left.Text = $row.Label; $left.FontSize = 16; $left.FontWeight = 'SemiBold'; $left.Foreground = [Windows.Media.BrushConverter]::new().ConvertFromString('#202020'); $left.VerticalAlignment = 'Center'; [void]$grid.Children.Add($left)
-  $right = New-Object Windows.Controls.TextBlock; $right.Text = $row.Value; $right.FontSize = 14; $right.VerticalAlignment = 'Center'; $right.HorizontalAlignment = 'Right'
-  if ($row.Status -eq 'pass') { $right.Foreground = [Windows.Media.BrushConverter]::new().ConvertFromString('#27683B') } elseif ($row.Status -eq 'unknown') { $right.Foreground = [Windows.Media.BrushConverter]::new().ConvertFromString('#766F68') } else { $right.Foreground = [Windows.Media.BrushConverter]::new().ConvertFromString('#B13E32') }; [void]$grid.Children.Add($right)
-  $card.Child = $grid; [void]$checks.Children.Add($card)
-}
-$window.FindName('Refresh').Add_Click({
-  # The GUI executable is launched hidden, so refresh never flashes a console.
-  $window.Close()
-  $start = New-Object System.Diagnostics.ProcessStartInfo
-  $start.FileName = $env:HACKZERO_DEVICE_CHECKER_UI_PATH; $start.UseShellExecute = $true
-  $start.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-  [System.Diagnostics.Process]::Start($start) | Out-Null
-})
-$window.FindName('Connect').Add_Click({ Start-Process 'https://hackzero.ai/device-checker' })
-[void]$window.ShowDialog()
-`
+const page = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>HackZero Device Checker</title><style>
+*{box-sizing:border-box}body{margin:0;background:#f7f5f1;color:#171717;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:930px;margin:0 auto;padding:45px 32px 64px}.brand{font-size:12px;font-weight:750;letter-spacing:.08em}.brand i{display:inline-block;width:7px;height:7px;background:#2785d7;border-radius:100%;margin-left:8px}.top{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #ded9d0;padding-bottom:28px}.pill{font-size:11px;letter-spacing:.08em;color:#27683b;background:#e9f4ec;border:1px solid #bedac6;border-radius:30px;padding:8px 12px}h1{font-family:Georgia,serif;font-size:clamp(44px,8vw,76px);font-weight:400;letter-spacing:-.06em;line-height:.92;margin:68px 0 20px;max-width:720px}h1 em{font-weight:400}.lede{font-size:18px;line-height:1.55;color:#58534f;max-width:610px}.panel{margin-top:43px;border:1px solid #ded9d0;background:#fffdfb;padding:20px}.row{display:flex;gap:18px;justify-content:space-between;align-items:center;background:#f4f1ed;margin:9px 0;padding:20px;border-left:3px solid #9b928a}.row.pass{background:#f2f7f3;border-color:#5a9b68}.row.fail,.row.needs_attention{background:#fff1ef;border-color:#d45c4d}.name{font-size:16px;font-weight:700}.value{font-size:14px;text-align:right;color:#756d67}.pass .value{color:#27683b}.fail .value,.needs_attention .value{color:#b13e32}.foot{display:flex;justify-content:space-between;align-items:center;gap:18px;padding-top:22px;color:#77716c;font-size:13px}button{border:1px solid #171717;background:#171717;color:white;padding:12px 18px;border-radius:2px;font:600 14px inherit;cursor:pointer}button:disabled{opacity:.6}.note{margin-top:26px;font-size:13px;line-height:1.5;color:#756d67}@media(max-width:600px){main{padding:30px 18px}.foot,.row{align-items:flex-start;flex-direction:column}.value{text-align:left}h1{margin-top:48px}}
+</style></head><body><main><header class="top"><div class="brand">HACKZERO<i></i></div><div class="pill">READ-ONLY · LOCAL CHECK</div></header><h1 id="title">Your device,<br><em>in view.</em></h1><p class="lede" id="description"></p><section class="panel" id="checks" aria-live="polite"></section><div class="foot"><span id="checked">Checking this device…</span><button id="refresh" type="button">Check again</button></div><p class="note">Nothing on this page is sent anywhere. Connecting this device is a separate, explicit step.</p></main><script>const e=s=>document.querySelector(s);async function refresh(){let b=e('#refresh');b.disabled=true;b.textContent='Checking…';try{let d=await (await fetch('/api/status',{cache:'no-store'})).json();e('#title').innerHTML=d.title.replace(',',' ,<br>').replace('in view.','<em>in view.</em>');e('#description').textContent=d.description;e('#checked').textContent=d.checkedAt;e('#checks').innerHTML=d.rows.map(x=>'<div class="row '+x.status+'"><span class="name">'+x.label+'</span><span class="value">'+x.value+'</span></div>').join('')}catch(_){e('#checked').textContent='Could not check this device. Try again.'}finally{b.disabled=false;b.textContent='Check again'}}e('#refresh').onclick=refresh;refresh()</script></body></html>`
