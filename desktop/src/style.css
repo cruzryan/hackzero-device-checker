@@ -878,7 +878,8 @@ footer {
   box-shadow: 0 10px 22px rgb(15 18 28 / 5%);
 }
 .app-shell:not(.unpaired) .check-action,
-.app-shell:not(.unpaired) .update-action {
+.app-shell:not(.unpaired) .update-action,
+.app-shell:not(.unpaired) .disconnect-action {
   min-height: 44px;
   padding: 0 17px;
   font: 700 12px/1 Inter, Arial, sans-serif;

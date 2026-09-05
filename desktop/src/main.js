@@ -80,6 +80,7 @@ function renderConnection(connection) {
   const action = document.querySelector("#connectHackZero");
   const title = document.querySelector("#connectionTitle");
   const description = document.querySelector("#connectionDescription");
+  const disconnect = document.querySelector("#disconnectHackZero");
   if (connection?.paired) {
     const identity = connection.person_name || "Connected device";
     const workspace = connection.workspace_name ? ` · ${connection.workspace_name}` : "";
@@ -87,11 +88,13 @@ function renderConnection(connection) {
     action.disabled = true;
     title.textContent = "This device is connected";
     description.textContent = `${identity} is sending read-only posture checks to ${connection.workspace_name || "your workspace"}.`;
+    disconnect.hidden = false;
   } else {
     action.innerHTML = "Connect device <b>→</b>";
     action.disabled = false;
     title.textContent = "Connect this device to HackZero";
     description.textContent = "Sign in to send this device's read-only posture record to your workspace.";
+    disconnect.hidden = true;
   }
 }
 
@@ -216,6 +219,16 @@ document.querySelector("#connectHackZero").addEventListener("click", async () =>
     // Never display a server response or internal error to the person using
     // the app. Those responses can include proxy HTML and security details.
     description.textContent = "We couldn't open the secure approval page. Check your connection and try again.";
+  }
+});
+document.querySelector("#disconnectHackZero")?.addEventListener("click", async () => {
+  const button = document.querySelector("#disconnectHackZero");
+  if (!window.confirm("Disconnect this device from HackZero? It will stop sending posture checks.")) return;
+  button.disabled = true;
+  try {
+    renderConnection(await invoke("disconnect_hackzero"));
+  } catch {
+    button.disabled = false;
   }
 });
 Promise.all([

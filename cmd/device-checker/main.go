@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/hackzero/device-checker/internal/agent"
@@ -40,13 +41,15 @@ func main() {
 		runAgent(false, os.Args[2:])
 	case "connection":
 		printConnection()
+	case "disconnect":
+		disconnectDevice()
 	default:
 		usage()
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: device-checker <status|pair|report|run|connection>")
+	fmt.Fprintln(os.Stderr, "usage: device-checker <status|pair|report|run|connection|disconnect>")
 	os.Exit(2)
 }
 
@@ -193,6 +196,53 @@ func printConnection() {
 		return
 	}
 	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"paired": true, "workspace_name": state.WorkspaceName, "person_name": state.PersonName})
+}
+
+// disconnectDevice deliberately has no browser authority. It asks the service
+// for a short-lived challenge, signs it using this device's private key, and
+// clears local identity only after the service revokes the registration.
+func disconnectDevice() {
+	state, err := loadState()
+	if err != nil {
+		fatal(err)
+	}
+	base := strings.TrimSuffix(state.ReportURL, "/reports")
+	var challenge struct {
+		Nonce string `json:"nonce"`
+	}
+	if err := postJSON(base+"/disconnect/challenge", map[string]string{"device_id": state.Identity.ID}, &challenge); err != nil {
+		fatal(err)
+	}
+	if challenge.Nonce == "" {
+		fatal(errors.New("server did not return a disconnect challenge"))
+	}
+	// Field declaration order is part of the canonical signed message contract.
+	unsigned := struct {
+		DeviceID string `json:"device_id"`
+		Nonce    string `json:"nonce"`
+	}{DeviceID: state.Identity.ID, Nonce: challenge.Nonce}
+	message, err := json.Marshal(unsigned)
+	if err != nil {
+		fatal(err)
+	}
+	signature, err := state.Identity.Sign(message)
+	if err != nil {
+		fatal(err)
+	}
+	if err := postJSON(base+"/disconnect", map[string]string{
+		"device_id": state.Identity.ID, "nonce": challenge.Nonce, "signature": signature,
+	}, &map[string]any{}); err != nil {
+		fatal(err)
+	}
+	// A later pairing uses a new key and identity rather than silently restoring
+	// a key that the service has already revoked.
+	if err := os.Remove(statePath() + ".pairing"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		fatal(err)
+	}
+	if err := os.Remove(statePath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		fatal(err)
+	}
+	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"disconnected": true})
 }
 
 func sendReport(args []string) {

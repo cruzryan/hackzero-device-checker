@@ -184,6 +184,20 @@ async fn connect_hackzero(app: tauri::AppHandle) -> Result<Connection, String> {
 }
 
 #[tauri::command]
+async fn disconnect_hackzero(app: tauri::AppHandle) -> Result<Connection, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = checker_command(&app)
+            .arg("disconnect")
+            .output()
+            .map_err(|error| format!("Could not start Device Checker: {error}"))?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        }
+        Ok(Connection { paired: false, workspace_name: None, person_name: None })
+    }).await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn background_tick(app: tauri::AppHandle) -> Result<(), String> {
     // The Tauri process is the resident, signed tray host. A short-lived child
     // performs one durable scheduler tick, so there is no second daemon to
@@ -262,6 +276,7 @@ fn main() {
             check_now,
             connection_status,
             connect_hackzero,
+            disconnect_hackzero,
             background_tick
         ])
         .run(tauri::generate_context!())
