@@ -56,7 +56,8 @@ func StartLoopback(session Session) (*Loopback, string, error) {
 			return
 		}
 		callback.finish(Result{Code: code})
-		_, _ = w.Write([]byte("Pairing confirmed. You may close this tab and return to Device Checker."))
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Device connected</title><style>body{margin:0;background:#09090b;color:#f8f7f4;font:16px/1.5 Arial,sans-serif}.wrap{max-width:560px;margin:12vh auto;padding:34px;border:1px solid #3b3d43;border-radius:18px;background:#15161a}.eyebrow{color:#9fc8ff;font:700 11px Consolas,monospace;letter-spacing:.14em}h1{margin:14px 0 10px;font:400 42px/1 Georgia,serif}p{color:#d0d1d7}</style><main class="wrap"><div class="eyebrow">HACKZERO DEVICE CHECKER</div><h1>Device connected.</h1><p>Return to Device Checker. It will finish the secure connection now.</p></main></html>`))
 	})
 	callback.server = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = callback.server.Serve(listener) }()
