@@ -751,6 +751,14 @@ footer {
   background: #111;
   box-shadow: 0 4px 12px #1112;
 }
+.app-shell:not(.unpaired).needs-verification .status-summary > span {
+  background: #a68028;
+  box-shadow: 0 4px 12px #a6802840;
+}
+.app-shell:not(.unpaired).needs-attention .status-summary > span {
+  background: #c94037;
+  box-shadow: 0 4px 12px #c9403740;
+}
 .app-shell:not(.unpaired) .status-summary strong {
   font: 700 13px/1 Inter, Arial, sans-serif;
 }

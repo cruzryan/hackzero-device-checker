@@ -49,6 +49,8 @@ function render(report) {
   const findings = (report.findings || []).filter((finding) => finding.check !== "pending_updates");
   const hasFailure = findings.some((finding) => finding.status === "fail");
   const hasUnknown = findings.some((finding) => finding.status === "unknown");
+  document.querySelector(".app-shell").classList.toggle("needs-verification", !hasFailure && hasUnknown);
+  document.querySelector(".app-shell").classList.toggle("needs-attention", hasFailure);
   const failedCount = findings.filter((finding) => finding.status === "fail").length;
   const protectedCount = findings.filter((finding) => finding.status === "pass").length;
   document.querySelector("#headline").textContent = hasFailure ? "This device needs attention" : hasUnknown ? "Couldn't verify this device yet" : "This device is protected";
