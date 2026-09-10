@@ -197,24 +197,37 @@ function startBackgroundChecks() {
 async function checkForUpdate() {
   const target = document.querySelector("#updateState");
   const install = document.querySelector("#installUpdate");
+  install.disabled = true;
+  install.textContent = "Checking for updates…";
   target.textContent = "Checking for updates…";
   try {
     availableUpdate = await check();
     if (!availableUpdate) {
       target.textContent = "Up to date";
+      install.textContent = "Check for updates";
       return;
     }
     target.textContent = `Version ${availableUpdate.version} is ready to install.`;
-    install.hidden = false;
+    install.textContent = `Install v${availableUpdate.version}`;
   } catch {
     // An update-server outage is never a failed security setting.
+    availableUpdate = null;
     target.textContent = "Update status unavailable";
+    install.textContent = "Check for updates";
+  } finally {
+    install.disabled = false;
   }
 }
 
-async function installAvailableUpdate() {
+async function updateAction() {
   const install = document.querySelector("#installUpdate");
-  if (!availableUpdate) return;
+  // The footer is useful even when the resident tray app has been open for
+  // days. A person can explicitly ask it to check again; installing is only
+  // possible after this process itself found a signed release.
+  if (!availableUpdate) {
+    await checkForUpdate();
+    return;
+  }
   install.disabled = true;
   install.textContent = "Downloading…";
   try {
@@ -223,7 +236,7 @@ async function installAvailableUpdate() {
     await relaunch();
   } catch {
     install.disabled = false;
-    install.textContent = "Try update again";
+    install.textContent = `Install v${availableUpdate.version}`;
     document.querySelector("#updateState").textContent = "The signed update could not be installed.";
   }
 }
@@ -278,7 +291,7 @@ document.querySelector("#posture").addEventListener("click", (event) => {
 document.querySelector("#launchRetry").addEventListener("click", () => refresh({ initial: true }));
 document.querySelector("#openHackZero")?.addEventListener("click", () => openUrl("https://hackzero.ai"));
 document.querySelector("#viewReleases")?.addEventListener("click", () => openUrl("https://github.com/cruzryan/hackzero-device-checker/releases"));
-document.querySelector("#installUpdate").addEventListener("click", installAvailableUpdate);
+document.querySelector("#installUpdate").addEventListener("click", updateAction);
 document.querySelector("#connectHackZero").addEventListener("click", async () => {
   const button = document.querySelector("#connectHackZero");
   const title = document.querySelector("#connectionTitle");
