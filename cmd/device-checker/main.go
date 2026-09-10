@@ -54,6 +54,10 @@ func usage() {
 }
 
 func printStatus() {
+	if runtime.GOOS == "windows" && !probe.Elevated() {
+		fmt.Fprintln(os.Stderr, "device-checker: administrator approval is required to collect Windows posture")
+		os.Exit(3)
+	}
 	observation, err := probe.Collect()
 	if err != nil {
 		// A collection error is not evidence of failure.
@@ -277,6 +281,9 @@ func configuredRunner() (agent.Runner, error) {
 // at boot; `run --once` is useful to test the installed runtime without a
 // resident process. `report` remains a convenient one-shot Check now alias.
 func runAgent(forceFull bool, args []string) {
+	if runtime.GOOS == "windows" && !probe.Elevated() {
+		fatal(errors.New("administrator approval is required to collect Windows posture"))
+	}
 	flags := flag.NewFlagSet("run", flag.ExitOnError)
 	once := flags.Bool("once", false, "run one scheduling tick and exit")
 	_ = flags.Parse(args)
@@ -289,7 +296,15 @@ func runAgent(forceFull bool, args []string) {
 		if err != nil {
 			fatal(err)
 		}
-		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"full_report_due": due.FullReport, "heartbeat_due": due.Heartbeat})
+		pending, pendingErr := runner.Spool.Pending()
+		if pendingErr != nil {
+			fatal(pendingErr)
+		}
+		delivery := "uploaded"
+		if len(pending) > 0 {
+			delivery = "queued"
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"full_report_due": due.FullReport, "heartbeat_due": due.Heartbeat, "delivery": delivery})
 		if *once || forceFull {
 			return
 		}

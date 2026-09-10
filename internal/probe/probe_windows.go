@@ -11,6 +11,14 @@ import (
 	"github.com/hackzero/device-checker/internal/posture"
 )
 
+// Elevated is intentionally narrow: this collector only needs elevation to
+// read protected Windows posture APIs. It never uses that privilege to alter
+// local configuration.
+func Elevated() bool {
+	output, err := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)").Output()
+	return err == nil && strings.EqualFold(strings.TrimSpace(string(output)), "True")
+}
+
 // collect asks PowerShell for a deliberately fixed, read-only data set. There
 // is no caller-controlled script interpolation. Every signal can remain unknown
 // when Windows does not expose an authoritative value on the machine.
@@ -37,13 +45,17 @@ try {
 } catch {}
 $timeout=(Get-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name ScreenSaveTimeOut).ScreenSaveTimeOut
 $screenSaver=(Get-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name ScreenSaveActive).ScreenSaveActive -eq '1'
-$update=(Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name NoAutoUpdate).NoAutoUpdate -ne 1
-$defender=(Get-MpComputerStatus).AntivirusEnabled
-[pscustomobject]@{bitlocker=$bitlocker;screenSaver=$screenSaver;timeout=$timeout;automaticUpdates=$update;defender=$defender}|ConvertTo-Json -Compress`
+$screenSecure=(Get-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name ScreenSaverIsSecure).ScreenSaverIsSecure -eq '1'
+$update=$null
+try { $settings=(New-Object -ComObject Microsoft.Update.AutoUpdate).Settings; if ($null -ne $settings) { $update=($settings.NotificationLevel -ge 3) } } catch {}
+$defender=$null
+try { $state=Get-MpComputerStatus -ErrorAction Stop; $defender=($state.AntivirusEnabled -and $state.RealTimeProtectionEnabled -and $state.AMRunningMode -eq 'Normal') } catch {}
+[pscustomobject]@{bitlocker=$bitlocker;screenSaver=$screenSaver;screenSecure=$screenSecure;timeout=$timeout;automaticUpdates=$update;defender=$defender}|ConvertTo-Json -Compress`
 
 type windowsRaw struct {
 	BitLocker        *bool           `json:"bitlocker"`
 	ScreenSaver      *bool           `json:"screenSaver"`
+	ScreenSecure     *bool           `json:"screenSecure"`
 	Timeout          json.RawMessage `json:"timeout"`
 	AutomaticUpdates *bool           `json:"automaticUpdates"`
 	Defender         *bool           `json:"defender"`
@@ -54,6 +66,7 @@ func (r windowsRaw) observation() posture.Observation {
 		DiskEncryptionEnabled: r.BitLocker,
 		ScreenLockEnabled:     r.ScreenSaver,
 		ScreenLockMinutes:     parseMinutes(r.Timeout),
+		ScreenLockSecure:      r.ScreenSecure,
 		AutoUpdatesEnabled:    r.AutomaticUpdates,
 		EndpointProtection:    r.Defender,
 	}

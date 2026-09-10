@@ -38,7 +38,7 @@ function escapeHtml(value) {
 }
 
 function statusLabel(status) {
-  return { pass: "Protected", fail: "Needs attention", needs_attention: "Needs attention", unknown: "Not available" }[status] || "Not available";
+  return { pass: "Protected", fail: "Needs attention", needs_attention: "Needs attention", unknown: "Couldn't verify" }[status] || "Couldn't verify";
 }
 
 function render(report) {
@@ -48,16 +48,18 @@ function render(report) {
   // exactly encryption, lock, automatic updates, and endpoint protection.
   const findings = (report.findings || []).filter((finding) => finding.check !== "pending_updates");
   const hasFailure = findings.some((finding) => finding.status === "fail");
+  const hasUnknown = findings.some((finding) => finding.status === "unknown");
   const failedCount = findings.filter((finding) => finding.status === "fail").length;
   const protectedCount = findings.filter((finding) => finding.status === "pass").length;
-  document.querySelector("#headline").textContent = hasFailure ? "This device needs attention" : "This device is protected";
+  document.querySelector("#headline").textContent = hasFailure ? "This device needs attention" : hasUnknown ? "Couldn't verify this device yet" : "This device is protected";
   document.querySelector("#description").textContent = hasFailure
     ? "Fix the items below, then check again. We only read these settings; we never change them."
+    : hasUnknown ? "Windows did not return a readable result for every required setting. Check the guidance, then run the check again."
     : "These security settings are on. We only read them; we never change anything on your device.";
-  document.querySelector("#summaryStatus").textContent = hasFailure ? "Action needed" : "Device protected";
+  document.querySelector("#summaryStatus").textContent = hasFailure ? "Action needed" : hasUnknown ? "Verification needed" : "Device protected";
   document.querySelector("#summaryDetail").textContent = hasFailure
     ? `${failedCount} setting${failedCount === 1 ? "" : "s"} needs attention`
-    : `${protectedCount} protections are on`;
+    : hasUnknown ? `${protectedCount} verified; ${findings.length - protectedCount} need verification` : `${protectedCount} protections are on`;
   const checkTime = new Date(report.checked_at);
   document.querySelector("#checkedAt").textContent = Number.isNaN(checkTime.valueOf())
     ? "Last checked just now"
@@ -170,7 +172,10 @@ async function refresh({ initial = false } = {}) {
   button.disabled = true;
   button.textContent = "Checking…";
   try {
-    render(await invoke("check_now"));
+    const report = await invoke("check_now");
+    render(report);
+    if (report.delivery === "uploaded") document.querySelector("#checkedAt").textContent += " · Evidence recorded";
+    if (report.delivery === "queued") document.querySelector("#checkedAt").textContent += " · Collected; upload will retry";
     if (initial && !keepLaunchVisible) setLaunchState({ visible: false, title: "", description: "" });
   }
   catch {

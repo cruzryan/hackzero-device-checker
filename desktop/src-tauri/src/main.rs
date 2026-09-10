@@ -27,7 +27,21 @@ struct Report {
     checked_at: String,
     platform: String,
     findings: Vec<Finding>,
+    delivery: String,
 }
+
+#[cfg(target_os = "windows")]
+fn is_elevated() -> bool {
+    Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", "([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map(|out| out.status.success() && String::from_utf8_lossy(&out.stdout).trim().eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_elevated() -> bool { true }
 
 #[derive(Deserialize, Serialize)]
 struct Connection {
@@ -109,6 +123,7 @@ fn checker_report(app: &tauri::AppHandle) -> Report {
                         .unwrap_or("")
                         .to_string(),
                     findings,
+                    delivery: "not_sent".into(),
                 };
             }
         }
@@ -117,6 +132,7 @@ fn checker_report(app: &tauri::AppHandle) -> Report {
         checked_at: chrono_like_now(),
         platform: String::new(),
         findings: unavailable_findings(),
+        delivery: "not_sent".into(),
     }
 }
 
@@ -159,7 +175,16 @@ fn chrono_like_now() -> String {
 
 #[tauri::command]
 fn check_now(app: tauri::AppHandle) -> Report {
-    checker_report(&app)
+    // A visible check is a full signed collection attempt, rather than a
+    // local-only preview. Offline envelopes are durably queued for retry.
+    let output = checker_command(&app).arg("report").output();
+    let mut report = checker_report(&app);
+    report.delivery = output.ok().and_then(|result| {
+        if !result.status.success() { return None; }
+        serde_json::from_slice::<serde_json::Value>(&result.stdout).ok()
+            .and_then(|json| json.get("delivery").and_then(|x| x.as_str()).map(str::to_string))
+    }).unwrap_or_else(|| "not_sent".into());
+    report
 }
 
 #[tauri::command]
@@ -235,6 +260,13 @@ fn main() {
             Some(vec!["--background"]),
         ))
         .setup(move |app| {
+            // The manifest prompts before this in a normal Windows build. This
+            // prevents a malformed launcher from ever presenting partial
+            // posture as a legitimate assessment.
+            if cfg!(target_os = "windows") && !is_elevated() {
+                app.handle().exit(1);
+                return Ok(());
+            }
             let show = MenuItem::with_id(app, "show", "Open Device Checker", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;

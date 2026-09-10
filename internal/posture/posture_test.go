@@ -12,6 +12,7 @@ func TestEvaluateHealthyDevice(t *testing.T) {
 	at := time.Date(2026, 9, 4, 12, 0, 0, 0, time.FixedZone("local", -6*60*60))
 	report := Evaluate(Observation{
 		DiskEncryptionEnabled: &truth, ScreenLockEnabled: &truth, ScreenLockMinutes: &ten,
+		ScreenLockSecure: &truth,
 		AutoUpdatesEnabled: &truth, PendingUpdates: &falsehood, EndpointProtection: &truth,
 	}, "windows", "11", "dev", at)
 	for name, signal := range map[string]Signal{
@@ -31,7 +32,7 @@ func TestEvaluateHealthyDevice(t *testing.T) {
 func TestPendingMaintenanceIsNotAConfigurationFailure(t *testing.T) {
 	truth := true
 	fifteen := 15
-	report := Evaluate(Observation{DiskEncryptionEnabled: &truth, ScreenLockEnabled: &truth, ScreenLockMinutes: &fifteen, AutoUpdatesEnabled: &truth, PendingUpdates: &truth, EndpointProtection: &truth}, "macos", "15", "dev", time.Now())
+	report := Evaluate(Observation{DiskEncryptionEnabled: &truth, ScreenLockEnabled: &truth, ScreenLockMinutes: &fifteen, ScreenLockSecure: &truth, AutoUpdatesEnabled: &truth, PendingUpdates: &truth, EndpointProtection: &truth}, "macos", "15", "dev", time.Now())
 	if report.AutomaticUpdates.Status != Pass {
 		t.Fatal("configured automatic updates must pass")
 	}
@@ -43,7 +44,7 @@ func TestPendingMaintenanceIsNotAConfigurationFailure(t *testing.T) {
 func TestScreenLockOverFifteenMinutesFails(t *testing.T) {
 	truth := true
 	sixteen := 16
-	report := Evaluate(Observation{ScreenLockEnabled: &truth, ScreenLockMinutes: &sixteen}, "linux", "24.04", "dev", time.Now())
+	report := Evaluate(Observation{ScreenLockEnabled: &truth, ScreenLockMinutes: &sixteen, ScreenLockSecure: &truth}, "linux", "24.04", "dev", time.Now())
 	if report.ScreenLock.Status != Fail || report.ScreenLock.Code != "screen_lock_timeout_too_long" {
 		t.Fatalf("unexpected signal: %#v", report.ScreenLock)
 	}
@@ -53,5 +54,15 @@ func TestMissingProbeIsUnknownNotFailure(t *testing.T) {
 	report := Evaluate(Observation{}, "windows", "11", "dev", time.Now())
 	if report.DiskEncryption.Status != Unknown || report.EndpointProtection.Status != Unknown {
 		t.Fatal("missing probes must be unknown rather than invented failures")
+	}
+}
+
+func TestScreenLockWithoutPasswordOnResumeFails(t *testing.T) {
+	truth := true
+	falsehood := false
+	ten := 10
+	report := Evaluate(Observation{ScreenLockEnabled: &truth, ScreenLockMinutes: &ten, ScreenLockSecure: &falsehood}, "windows", "11", "dev", time.Now())
+	if report.ScreenLock.Status != Fail || report.ScreenLock.Code != "screen_lock_password_not_required" {
+		t.Fatalf("unexpected signal: %#v", report.ScreenLock)
 	}
 }

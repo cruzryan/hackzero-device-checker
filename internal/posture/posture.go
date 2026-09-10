@@ -28,6 +28,7 @@ type Observation struct {
 	DiskEncryptionEnabled *bool
 	ScreenLockEnabled     *bool
 	ScreenLockMinutes     *int
+	ScreenLockSecure      *bool
 	AutoUpdatesEnabled    *bool
 	PendingUpdates        *bool
 	EndpointProtection    *bool
@@ -59,7 +60,7 @@ func Evaluate(ob Observation, platform, osVersion, checkerVersion string, at tim
 		OSVersion:          osVersion,
 		CheckerVersion:     checkerVersion,
 		DiskEncryption:     boolSignal(ob.DiskEncryptionEnabled, "disk_encryption_disabled"),
-		ScreenLock:         screenLockSignal(ob.ScreenLockEnabled, ob.ScreenLockMinutes),
+		ScreenLock:         screenLockSignal(ob.ScreenLockEnabled, ob.ScreenLockMinutes, ob.ScreenLockSecure),
 		AutomaticUpdates:   boolSignal(ob.AutoUpdatesEnabled, "automatic_updates_disabled"),
 		PendingMaintenance: pendingSignal(ob.PendingUpdates),
 		EndpointProtection: boolSignal(ob.EndpointProtection, "endpoint_protection_unavailable"),
@@ -76,8 +77,8 @@ func boolSignal(ok *bool, failCode string) Signal {
 	return Signal{Status: Fail, Code: failCode}
 }
 
-func screenLockSignal(enabled *bool, minutes *int) Signal {
-	if enabled == nil || minutes == nil {
+func screenLockSignal(enabled *bool, minutes *int, secure *bool) Signal {
+	if enabled == nil || minutes == nil || secure == nil {
 		return Signal{Status: Unknown, Code: "signal_unavailable"}
 	}
 	if !*enabled {
@@ -85,6 +86,9 @@ func screenLockSignal(enabled *bool, minutes *int) Signal {
 	}
 	if *minutes <= 0 || *minutes > 15 {
 		return Signal{Status: Fail, Code: "screen_lock_timeout_too_long"}
+	}
+	if !*secure {
+		return Signal{Status: Fail, Code: "screen_lock_password_not_required"}
 	}
 	return Signal{Status: Pass}
 }
