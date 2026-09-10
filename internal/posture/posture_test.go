@@ -12,7 +12,7 @@ func TestEvaluateHealthyDevice(t *testing.T) {
 	at := time.Date(2026, 9, 4, 12, 0, 0, 0, time.FixedZone("local", -6*60*60))
 	report := Evaluate(Observation{
 		DiskEncryptionEnabled: &truth, ScreenLockEnabled: &truth, ScreenLockMinutes: &ten,
-		ScreenLockSecure: &truth,
+		ScreenLockSecure:   &truth,
 		AutoUpdatesEnabled: &truth, PendingUpdates: &falsehood, EndpointProtection: &truth,
 	}, "windows", "11", "dev", at)
 	for name, signal := range map[string]Signal{
