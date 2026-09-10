@@ -772,7 +772,7 @@ footer {
 }
 .app-shell:not(.unpaired) .finding {
   display: flex;
-  min-height: 105px;
+  min-height: 145px;
   padding: 16px 20px;
   border: 1px solid #e9eaed;
   border-radius: 21px;
@@ -887,6 +887,7 @@ footer {
   color: #356940;
 }
 .app-shell:not(.unpaired) .finding.fail {
+  min-height: 165px;
   border-color: #ffc9c6;
   background: linear-gradient(120deg, #fffafb, #fffefe);
 }
