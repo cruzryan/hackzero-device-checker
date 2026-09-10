@@ -11,6 +11,44 @@ const labels = {
   endpoint_protection: "Endpoint protection"
 };
 
+const requirements = {
+  disk_encryption: ["Full-disk encryption is enabled for the system drive."],
+  screen_lock: [
+    "Automatic idle lock is enabled.",
+    "The device locks after 15 minutes or less of inactivity.",
+    "A password is required when you return."
+  ],
+  automatic_updates: ["Automatic operating-system updates are enabled."],
+  endpoint_protection: ["Approved endpoint protection is active and real-time protection is on."]
+};
+
+const failureDetails = {
+  disk_encryption_disabled: {
+    title: "Disk encryption is off",
+    detected: "Detected: the system drive is not reported as encrypted."
+  },
+  screen_lock_disabled: {
+    title: "Automatic idle lock is off",
+    detected: "Detected: automatic idle lock is not active."
+  },
+  screen_lock_timeout_too_long: {
+    title: "Idle lock must activate within 15 minutes",
+    detected: "Detected: the device locks after more than 15 minutes of inactivity."
+  },
+  screen_lock_password_not_required: {
+    title: "Password required after idle lock",
+    detected: "Detected: a password is not required when the idle lock resumes."
+  },
+  automatic_updates_disabled: {
+    title: "Automatic updates are off",
+    detected: "Detected: automatic operating-system updates are not enabled."
+  },
+  endpoint_protection_unavailable: {
+    title: "Endpoint protection needs attention",
+    detected: "Detected: active real-time endpoint protection was not reported."
+  }
+};
+
 // Fixed first-party documentation only. A checker report never provides a URL.
 const remediation = {
   windows: {
@@ -32,6 +70,32 @@ const remediation = {
     endpoint_protection: ["Review Ubuntu security", "https://documentation.ubuntu.com/security/security-features/security-features-overview/"]
   }
 };
+
+function findingCopy(finding) {
+  const detail = failureDetails[finding.reason];
+  if (finding.status === "fail" && detail) return detail;
+  if (finding.status === "unknown") {
+    return {
+      title: `Could not verify ${labels[finding.check] || finding.check}`,
+      detected: "Detected: this device did not return a readable value. No compliance claim has been made."
+    };
+  }
+  return { title: labels[finding.check] || finding.check, detected: "Detected: requirement verified." };
+}
+
+function requirementPanel(finding) {
+  const rules = requirements[finding.check];
+  if (!rules) return "";
+  const panelId = `requirements-${finding.check}`;
+  return `
+    <button class="details-toggle" type="button" data-details="${escapeHtml(panelId)}" aria-expanded="false" aria-controls="${escapeHtml(panelId)}">
+      What we check <span aria-hidden="true">?</span>
+    </button>
+    <div class="requirements-panel" id="${escapeHtml(panelId)}" hidden>
+      <strong>To pass, this device must have:</strong>
+      <ul>${rules.map((rule) => `<li>${escapeHtml(rule)}</li>`).join("")}</ul>
+    </div>`;
+}
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
@@ -71,10 +135,11 @@ function render(report) {
     // An unreadable local signal is not an instruction to change a setting.
     // Only an affirmative failed check receives a remediation link.
     const guide = finding.status === "fail" ? platformRemediation[finding.check] : null;
+    const copy = findingCopy(finding);
     return `
     <article class="finding ${finding.status}">
-      <div class="finding-title"><span class="indicator">${finding.status === "pass" ? "✓" : finding.status === "fail" ? "!" : "–"}</span><strong>${escapeHtml(labels[finding.check] || finding.check)}</strong><span class="status-pill">${statusLabel(finding.status)}</span></div>
-      <div class="result">${finding.reason ? `<small>${escapeHtml(finding.reason.replaceAll("_", " "))}</small>` : ""}${guide ? `<button class="fix-link" data-remediation="${escapeHtml(finding.check)}">${escapeHtml(guide[0])} →</button>` : ""}</div>
+      <div class="finding-title"><span class="indicator">${finding.status === "pass" ? "✓" : finding.status === "fail" ? "!" : "–"}</span><strong>${escapeHtml(copy.title)}</strong><span class="status-pill">${statusLabel(finding.status)}</span></div>
+      <div class="result"><small>${escapeHtml(copy.detected)}</small>${guide ? `<button class="fix-link" data-remediation="${escapeHtml(finding.check)}">How to fix this on ${escapeHtml(report.platform === "darwin" ? "macOS" : report.platform === "windows" ? "Windows" : "Linux")} →</button>` : ""}${requirementPanel(finding)}</div>
     </article>`;
   }).join("");
 }
@@ -195,6 +260,16 @@ async function refresh({ initial = false } = {}) {
 
 document.querySelector("#checkAgain").addEventListener("click", refresh);
 document.querySelector("#posture").addEventListener("click", (event) => {
+  const details = event.target.closest("[data-details]");
+  if (details) {
+    const panel = document.getElementById(details.dataset.details);
+    if (panel) {
+      const expanded = details.getAttribute("aria-expanded") === "true";
+      details.setAttribute("aria-expanded", String(!expanded));
+      panel.hidden = expanded;
+    }
+    return;
+  }
   const check = event.target.closest("[data-remediation]")?.dataset.remediation;
   const platform = window.latestReportPlatform;
   const guide = check && remediation[platform]?.[check];

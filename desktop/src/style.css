@@ -819,7 +819,9 @@ footer {
 .app-shell:not(.unpaired) .result {
   position: absolute;
   left: 72px;
-  bottom: 14px;
+  top: 62px;
+  right: 20px;
+  bottom: auto;
   margin: 0;
   gap: 8px;
   color: inherit;
@@ -828,6 +830,52 @@ footer {
   color: #777982;
   font: 400 10px/1.2 Inter, Arial, sans-serif;
   text-transform: none;
+}
+.app-shell:not(.unpaired) .finding:has(.requirements-panel:not([hidden])) {
+  min-height: 250px;
+}
+.details-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: max-content;
+  padding: 0;
+  border: 0;
+  color: #5d6470;
+  background: transparent;
+  font: 600 10px/1.2 Inter, Arial, sans-serif;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.details-toggle span {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font: 700 9px/1 Inter, Arial, sans-serif;
+  text-decoration: none;
+}
+.requirements-panel {
+  padding: 10px 12px;
+  border: 1px solid #e1e4e8;
+  border-radius: 10px;
+  color: #4f5661;
+  background: #f8f9fa;
+  font: 400 10px/1.35 Inter, Arial, sans-serif;
+}
+.requirements-panel strong {
+  display: block;
+  color: #30343b;
+  font: 650 10px/1.2 Inter, Arial, sans-serif;
+}
+.requirements-panel ul {
+  margin: 7px 0 0;
+  padding-left: 16px;
+}
+.requirements-panel li + li {
+  margin-top: 4px;
 }
 .app-shell:not(.unpaired) .finding.pass {
   border-color: #e0ebe2;
