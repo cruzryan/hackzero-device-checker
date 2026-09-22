@@ -35,14 +35,22 @@ func collect() (posture.Observation, error) {
 		protection = &value
 	}
 
+	// Screen lock is only readable in the logged-in user's GUI session, which is
+	// where this collector runs when launched from the tray app. sysadminctl
+	// reports whether a password is required on wake; the display-sleep and
+	// screensaver idle timeouts give how soon the screen darkens and locks.
+	lockEnabled, lockSecure := parseScreenLock(commandOutput("/usr/sbin/sysadminctl", "-screenLock", "status"))
+	displaySleep := parsePmsetDisplaySleep(commandOutput("/usr/bin/pmset", "-g"))
+	screensaverIdle := parseIntOutput(commandOutput("/usr/bin/defaults", "-currentHost", "read", "com.apple.screensaver", "idleTime"))
+	lockMinutes := screenLockMinutes(displaySleep, screensaverIdle)
+
 	return posture.Observation{
 		DiskEncryptionEnabled: fileVault,
 		AutoUpdatesEnabled:    updates,
 		EndpointProtection:    protection,
-		// macOS exposes screen-lock settings through per-user preference domains
-		// that a launchd service must not read for another user, and the idle
-		// timeout is not available from a system-level command, so screen lock
-		// stays unknown until a signed-in user probe exists.
+		ScreenLockEnabled:     lockEnabled,
+		ScreenLockMinutes:     lockMinutes,
+		ScreenLockSecure:      lockSecure,
 	}, nil
 }
 
