@@ -322,8 +322,13 @@ document.querySelector("#disconnectHackZero")?.addEventListener("click", async (
   button.disabled = true;
   try {
     renderConnection(await invoke("disconnect_hackzero"));
-  } catch {
+  } catch (error) {
+    // Never leave a click with no feedback. Surface a calm message rather than
+    // a raw server response, and re-enable so the person can retry.
+    console.error("Device Checker disconnect failed", error);
     button.disabled = false;
+    const description = document.querySelector("#connectionDescription");
+    if (description) description.textContent = "We couldn't disconnect this device. Check your connection and try again.";
   }
 });
 Promise.all([

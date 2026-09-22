@@ -203,22 +203,40 @@ func printConnection() {
 }
 
 // disconnectDevice deliberately has no browser authority. It asks the service
-// for a short-lived challenge, signs it using this device's private key, and
-// clears local identity only after the service revokes the registration.
+// to revoke this device's registration by signing a short-lived challenge, then
+// clears local pairing. Clearing this device's OWN local state needs no server
+// permission, so if the service no longer has an active registration (the device
+// was already deactivated), disconnect still succeeds and cleans up locally
+// instead of trapping the user as connected. Only a genuine transport failure
+// keeps local state so the user can retry.
 func disconnectDevice() {
 	state, err := loadState()
 	if err != nil {
+		// Nothing is connected locally (or the pairing is unreadable); make sure
+		// no stale files remain and report success so the UI settles unpaired.
+		removeLocalPairing()
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"disconnected": true})
+		return
+	}
+	if err := revokeServerRegistration(state); err != nil && !serverForgotDevice(err) {
 		fatal(err)
 	}
+	removeLocalPairing()
+	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"disconnected": true})
+}
+
+// revokeServerRegistration performs the signed disconnect handshake so the
+// service stops accepting this device's reports.
+func revokeServerRegistration(state savedState) error {
 	base := strings.TrimSuffix(state.ReportURL, "/reports")
 	var challenge struct {
 		Nonce string `json:"nonce"`
 	}
 	if err := postJSON(base+"/disconnect/challenge", map[string]string{"device_id": state.Identity.ID}, &challenge); err != nil {
-		fatal(err)
+		return err
 	}
 	if challenge.Nonce == "" {
-		fatal(errors.New("server did not return a disconnect challenge"))
+		return errors.New("server did not return a disconnect challenge")
 	}
 	// Field declaration order is part of the canonical signed message contract.
 	unsigned := struct {
@@ -227,26 +245,35 @@ func disconnectDevice() {
 	}{DeviceID: state.Identity.ID, Nonce: challenge.Nonce}
 	message, err := json.Marshal(unsigned)
 	if err != nil {
-		fatal(err)
+		return err
 	}
 	signature, err := state.Identity.Sign(message)
 	if err != nil {
-		fatal(err)
+		return err
 	}
-	if err := postJSON(base+"/disconnect", map[string]string{
+	return postJSON(base+"/disconnect", map[string]string{
 		"device_id": state.Identity.ID, "nonce": challenge.Nonce, "signature": signature,
-	}, &map[string]any{}); err != nil {
-		fatal(err)
+	}, &map[string]any{})
+}
+
+// serverForgotDevice reports whether the error means the service has no active
+// registration for this device, so there is nothing left to revoke.
+func serverForgotDevice(err error) bool {
+	var he *httpError
+	if errors.As(err, &he) {
+		return he.status == http.StatusUnauthorized ||
+			he.status == http.StatusNotFound ||
+			he.status == http.StatusGone
 	}
-	// A later pairing uses a new key and identity rather than silently restoring
-	// a key that the service has already revoked.
-	if err := os.Remove(statePath() + ".pairing"); err != nil && !errors.Is(err, os.ErrNotExist) {
-		fatal(err)
-	}
-	if err := os.Remove(statePath()); err != nil && !errors.Is(err, os.ErrNotExist) {
-		fatal(err)
-	}
-	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"disconnected": true})
+	return false
+}
+
+// removeLocalPairing clears this device's pairing and identity so a later
+// pairing uses a fresh key rather than one the service may have revoked. It is
+// best effort: a leftover file must not block the user from disconnecting.
+func removeLocalPairing() {
+	_ = os.Remove(statePath() + ".pairing")
+	_ = os.Remove(statePath())
 }
 
 func sendReport(args []string) {
@@ -313,6 +340,18 @@ func runAgent(forceFull bool, args []string) {
 	}
 }
 
+// httpError carries a non-2xx server response so callers can branch on the
+// status code (for example, treating 401/404 on disconnect as "already gone")
+// without matching on the response text.
+type httpError struct {
+	status int
+	body   string
+}
+
+func (e *httpError) Error() string {
+	return fmt.Sprintf("server returned %d: %s", e.status, e.body)
+}
+
 func postJSON(url string, input, output any) error {
 	return postJSONContext(context.Background(), url, input, output)
 }
@@ -336,7 +375,7 @@ func postJSONContext(ctx context.Context, url string, input, output any) error {
 	limited := io.LimitReader(response.Body, 64*1024)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		data, _ := io.ReadAll(limited)
-		return fmt.Errorf("server returned %s: %s", response.Status, string(data))
+		return &httpError{status: response.StatusCode, body: string(data)}
 	}
 	err = json.NewDecoder(limited).Decode(output)
 	if errors.Is(err, io.EOF) {
