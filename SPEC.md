@@ -34,24 +34,23 @@ The checker does **not** satisfy AC-13 Device return and wipe. It can identify t
 | Disk encryption | FileVault enabled | BitLocker enabled | LUKS enabled |
 | Screen lock | Automatic lock with password required on return, within the HackZero policy limit | Equivalent Windows lock/password policy | Equivalent supported desktop lock policy |
 | Automatic OS updates | macOS automatic updates enabled | Windows Update automatic updates enabled | Unattended security updates enabled |
-| Malware protection | XProtect and Gatekeeper enabled/current | Microsoft Defender real-time protection enabled and current | Supported malware-protection service active and definitions current |
+| Malware protection | Gatekeeper enabled and XProtect data updates on | Microsoft Defender real-time protection on, or another antivirus on | Supported malware-protection service active |
 
 The default HackZero screen-lock limit is 15 minutes. A customer can only change that limit through their documented security policy; it is not a per-device toggle.
 
-### Updates: two separate facts
-
-The checker records both of these facts:
-
-1. **Automatic updates enabled**. This is the AC-12 requirement. If disabled, AC-12 fails.
-2. **Important update pending**. This is an amber maintenance action, not an AC-12 failure by itself. A laptop can have automatic updates enabled while it waits for a safe install/restart window.
+These four are the only things the checker checks and shows. It does not
+report whether updates are waiting to install, and it does not warn about the
+age of malware definitions: neither is an AC-12 requirement. Automatic updates
+being enabled is the requirement; if they are disabled, AC-12 fails.
 
 ## Collector report v2
 
 `schema_version` stays `1`; every v2 addition is optional, so older servers and
 readers keep working. The report keeps its field order:
 `schema_version, collected_at, platform, os_version, checker_version,
-disk_encryption, screen_lock, automatic_updates, pending_maintenance,
-endpoint_protection`.
+disk_encryption, screen_lock, automatic_updates, endpoint_protection`.
+Earlier builds also sent `pending_maintenance`; it is no longer collected or
+sent, and the service tolerates it being absent.
 
 - `os_version` is the real OS version: macOS `sw_vers -productVersion`
   (`26.5.2`), Windows `Major.Minor.Build` (`10.0.26200`), Linux `VERSION_ID`
@@ -62,11 +61,14 @@ endpoint_protection`.
 Each signal is:
 
 ```json
-{ "status": "pass|fail|needs_attention|unknown",
+{ "status": "pass|fail|unknown",
   "code": "primary reason, omitted on pass",
   "detail": { "raw facts, omitted when nothing was read" },
   "warnings": ["warning codes, omitted when empty; never change status"] }
 ```
+
+`warnings` stays in the contract for compatibility, but nothing emits it
+today.
 
 ### Signature safety
 
@@ -135,24 +137,19 @@ policy (`NoAutoUpdate`, `AUOptions`), the AutoUpdate COM notification level,
 `{ "check", "download" }` from `apt-config dump APT::Periodic`. Codes:
 `automatic_updates_disabled`, `automatic_updates_paused`.
 
-**Pending updates** (`pending_maintenance`) is a warning, never a failure:
-`needs_attention` with code `updates_pending` and
-`{ "count": 2, "waiting_days": 8 }`. On macOS, `count` is the
-`RecommendedUpdates` that are not major OS upgrades (Safari and other app
-updates count) and `waiting_days` is the age of the oldest counted offer in
-`FirstOfferDateDictionary`. Unknown on Windows and Linux.
-
 **Endpoint protection** (`endpoint_protection`). macOS detail
 `{ "gatekeeper", "system_data_updates", "definitions_version", "definitions_age_days" }`
-from `spctl --status`, `ConfigDataInstall`, and `xprotect version`. Codes
-`gatekeeper_disabled`, `definitions_updates_off`; warning `definitions_stale`
-when XProtect was last installed more than 30 days ago. Windows detail
+from `spctl --status`, `ConfigDataInstall`, and `xprotect version`. Passes
+when Gatekeeper is on and XProtect data updates are on. Codes
+`gatekeeper_disabled`, `definitions_updates_off`. Windows detail
 `{ "defender_realtime", "defender_mode": "normal|passive|edr_block|off|unknown", "other_antivirus", "definitions_age_days" }`
 from `Get-MpComputerStatus` and `root/SecurityCenter2 AntiVirusProduct`
 (`other_antivirus` counts enabled, up-to-date products that are not
 Defender). Passes when Defender real-time protection runs in normal mode or
-another antivirus is healthy; code `endpoint_protection_unavailable`; warning
-`definitions_stale` over 7 days. Linux keeps the ClamAV daemon check.
+another antivirus is healthy; code `endpoint_protection_unavailable`. Linux
+keeps the ClamAV daemon check. `definitions_version` and
+`definitions_age_days` are raw facts shown only in Diagnostics: they never
+produce a warning or change the status.
 
 ## Collector command line
 

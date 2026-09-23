@@ -81,17 +81,7 @@ const realIdleUnset = "2026-09-23 12:35:20.603 defaults[69266:2988063] \nThe dom
 const realSoftwareUpdateJSON = `{
   "AutomaticDownload": 1, "AutomaticallyInstallMacOSUpdates": 1,
   "ConfigDataInstall": 1, "CriticalUpdateInstall": 1,
-  "FirstOfferDateDictionary": {
-    "MSU_UPDATE_25F71_patch_26.5_minor": "2026-05-20T16:15:10Z",
-    "MSU_UPDATE_25G229_patch_26.7_minor": "2026-09-15T01:36:31Z",
-    "MSU_UPDATE_26A428_patch_27.0_major": "2026-09-15T01:36:31Z"
-  },
-  "LastSuccessfulDate": "2026-09-23T18:40:50Z",
-  "RecommendedUpdates": [
-    {"Display Name": "Safari", "Display Version": "27.0", "Identifier": "Safari27.0TahoeAuto", "Product Key": "047-48781"},
-    {"Display Name": "macOS 27", "Display Version": 27, "Identifier": "MSU_UPDATE_26A428_patch_27.0_major", "MobileSoftwareUpdate": 1, "Product Key": "MSU_UPDATE_26A428_patch_27.0_major"},
-    {"Display Name": "macOS Tahoe 26.7", "Display Version": "26.7", "Identifier": "MSU_UPDATE_25G229_patch_26.7_minor", "MobileSoftwareUpdate": 1, "Product Key": "MSU_UPDATE_25G229_patch_26.7_minor"}
-  ]
+  "LastSuccessfulDate": "2026-09-23T18:40:50Z"
 }`
 
 func TestParseFileVaultState(t *testing.T) {
@@ -264,20 +254,6 @@ func TestMacUpdateFacts(t *testing.T) {
 	}
 }
 
-func TestMacPendingUpdatesExcludeMajorUpgrade(t *testing.T) {
-	now := time.Date(2026, 9, 23, 18, 45, 0, 0, time.UTC)
-	pending := macPendingUpdates(mustPlist(t, realSoftwareUpdateJSON), "26.5.2", now)
-	// Safari 27.0 and macOS 26.7 count; macOS 27 is a major upgrade.
-	wantInt(t, pending.Count, intp(2), "count")
-	wantInt(t, pending.WaitingDays, intp(8), "offered 2026-09-15")
-
-	noMarker := mustPlist(t, `{"RecommendedUpdates":[{"Identifier":"MSU_UPDATE_X","Display Version":"27.1","MobileSoftwareUpdate":true}]}`)
-	wantInt(t, macPendingUpdates(noMarker, "26.5.2", now).Count, intp(0), "major by version")
-	none := macPendingUpdates(map[string]any{}, "26.5.2", now)
-	wantInt(t, none.Count, intp(0), "none")
-	wantInt(t, none.WaitingDays, nil, "no wait")
-}
-
 func TestDecodePlistXMLFallback(t *testing.T) {
 	xmlText := `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -286,12 +262,6 @@ func TestDecodePlistXMLFallback(t *testing.T) {
 	<key>AutomaticDownload</key><true/>
 	<key>CriticalUpdateInstall</key><integer>0</integer>
 	<key>LastSuccessfulDate</key><date>2026-09-23T18:40:50Z</date>
-	<key>FirstOfferDateDictionary</key>
-	<dict><key>MSU_UPDATE_25G229_patch_26.7_minor</key><date>2026-09-15T01:36:31Z</date></dict>
-	<key>RecommendedUpdates</key>
-	<array>
-		<dict><key>Display Version</key><string>26.7</string><key>Identifier</key><string>MSU_UPDATE_25G229_patch_26.7_minor</string><key>MobileSoftwareUpdate</key><true/></dict>
-	</array>
 	<key>Blob</key><data>AAEC</data>
 	<key>Ratio</key><real>1.5</real>
 </dict>
@@ -303,9 +273,9 @@ func TestDecodePlistXMLFallback(t *testing.T) {
 	facts := macUpdateFacts(plist, nil, nil)
 	wantBool(t, facts.Download, boolp(true), "xml true")
 	wantBool(t, facts.SecurityResponses, boolp(false), "xml integer 0")
-	pending := macPendingUpdates(plist, "26.5.2", time.Date(2026, 9, 23, 0, 0, 0, 0, time.UTC))
-	wantInt(t, pending.Count, intp(1), "xml count")
-	wantInt(t, pending.WaitingDays, intp(7), "xml date")
+	if plist["LastSuccessfulDate"] != "2026-09-23T18:40:50Z" || plist["Blob"] != "AAEC" || plist["Ratio"] != 1.5 {
+		t.Fatalf("xml date/data/real: %#v", plist)
+	}
 }
 
 func TestManagedScreensaverWins(t *testing.T) {
@@ -355,7 +325,6 @@ func TestMacObservationRealCapture(t *testing.T) {
 		`"disk_encryption":{"status":"pass","detail":{"state":"on"}},` +
 		`"screen_lock":{"status":"fail","code":"screen_lock_timeout_too_long","detail":{"limit_minutes":15,"password":"delay","password_delay_seconds":300,"active_power":"ac","profiles":[{"power":"battery","display_off_minutes":2,"lock_minutes":7,"ok":true},{"power":"ac","display_off_minutes":30,"lock_minutes":35,"ok":false}]}},` +
 		`"automatic_updates":{"status":"pass","detail":{"check":true,"download":true,"security_responses":true,"system_data":true,"os_install":true}},` +
-		`"pending_maintenance":{"status":"needs_attention","code":"updates_pending","detail":{"count":2,"waiting_days":8}},` +
 		`"endpoint_protection":{"status":"pass","detail":{"gatekeeper":true,"system_data_updates":true,"definitions_version":5360,"definitions_age_days":4}}}`
 	if string(data) != want {
 		t.Fatalf("\n got %s\nwant %s", data, want)

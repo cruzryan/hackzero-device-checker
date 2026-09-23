@@ -38,7 +38,6 @@ func macFixtureReport(at time.Time) posture.Report {
 			Profiles: []posture.ProfileFacts{{Power: posture.PowerBattery, DisplayOffSeconds: ip(120)}, {Power: posture.PowerAC, DisplayOffSeconds: ip(1800)}},
 		},
 		Updates:  &posture.UpdateFacts{Check: bp(true), Download: bp(true), SecurityResponses: bp(true), SystemData: bp(true), OSInstall: bp(false)},
-		Pending:  &posture.PendingFacts{Count: ip(2), WaitingDays: ip(8)},
 		Endpoint: &posture.EndpointFacts{Gatekeeper: bp(true), SystemDataUpdates: bp(true), DefinitionsVersion: ip(5360), DefinitionsAgeDays: ip(45)},
 	}, "darwin", "", "0.2.0", at)
 }
@@ -56,13 +55,12 @@ func windowsFixtureReport(at time.Time) posture.Report {
 	}, "windows", "", "0.2.0", at)
 }
 
-// allFieldsReport populates every detail key and a warning on every signal.
+// allFieldsReport populates every detail key on every signal.
 func allFieldsReport(at time.Time) posture.Report {
-	warn := []string{posture.WarningDefinitionsStale}
 	return posture.Report{
 		SchemaVersion: 1, CollectedAt: at, Platform: "darwin", OSVersion: "26.5.2", CheckerVersion: "0.2.0",
-		DiskEncryption: posture.Signal{Status: posture.Pass, Detail: &posture.DiskDetail{State: posture.DiskEncrypting, Percent: ip(42)}, Warnings: warn},
-		ScreenLock: posture.Signal{Status: posture.Fail, Code: posture.CodeScreenLockTooLong, Warnings: warn, Detail: &posture.ScreenLockDetail{
+		DiskEncryption: posture.Signal{Status: posture.Pass, Detail: &posture.DiskDetail{State: posture.DiskEncrypting, Percent: ip(42)}},
+		ScreenLock: posture.Signal{Status: posture.Fail, Code: posture.CodeScreenLockTooLong, Detail: &posture.ScreenLockDetail{
 			LimitMinutes: 15, Password: posture.PasswordDelay, PasswordDelaySeconds: ip(300), ScreensaverMinutes: ip(20), ActivePower: posture.PowerBattery,
 			Profiles: []posture.ProfileDetail{
 				{Power: posture.PowerBattery, DisplayOffMinutes: ip(2), LockMinutes: ip(7), OK: true},
@@ -71,11 +69,10 @@ func allFieldsReport(at time.Time) posture.Report {
 				{Power: posture.PowerAny, DisplayOffMinutes: ip(5), LockMinutes: ip(10), OK: true},
 			},
 		}},
-		AutomaticUpdates: posture.Signal{Status: posture.Fail, Code: posture.CodeUpdatesPaused, Warnings: warn, Detail: &posture.UpdatesDetail{
+		AutomaticUpdates: posture.Signal{Status: posture.Fail, Code: posture.CodeUpdatesPaused, Detail: &posture.UpdatesDetail{
 			Check: bp(true), Download: bp(true), SecurityResponses: bp(true), SystemData: bp(false), OSInstall: bp(false), Paused: bp(true), PolicyDisabled: bp(false),
 		}},
-		PendingMaintenance: posture.Signal{Status: posture.NeedsAttention, Code: posture.CodeUpdatesPending, Warnings: warn, Detail: &posture.PendingDetail{Count: 2, WaitingDays: ip(8)}},
-		EndpointProtection: posture.Signal{Status: posture.Pass, Warnings: warn, Detail: &posture.EndpointDetail{
+		EndpointProtection: posture.Signal{Status: posture.Pass, Detail: &posture.EndpointDetail{
 			Gatekeeper: bp(true), SystemDataUpdates: bp(true), DefinitionsVersion: ip(5360),
 			DefenderRealtime: bp(true), DefenderMode: posture.DefenderEDRBlock, OtherAntivirus: ip(3), DefinitionsAgeDays: ip(45),
 		}},

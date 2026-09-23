@@ -51,8 +51,7 @@ func collect() (posture.Observation, error) {
 	case localErr == nil:
 		in.SoftwareUpdate = local
 	case errors.Is(localErr, os.ErrNotExist):
-		// No preferences file: every key is at its default (on). Pending
-		// updates stay unknown because no scan result is recorded.
+		// No preferences file: every key is at its default (on).
 		in.SoftwareUpdate = map[string]any{}
 	}
 	if managed, err := readPlist(managedSoftwareUpdatePlist); err == nil {
@@ -61,11 +60,7 @@ func collect() (posture.Observation, error) {
 	if in.XProtect == nil {
 		in.XProtectVersion = commandOutput("/usr/bin/defaults", "read", xprotectInfoPlist, "CFBundleShortVersionString")
 	}
-	ob := macObservation(in, time.Now())
-	if localErr != nil {
-		ob.Pending = nil
-	}
-	return ob, nil
+	return macObservation(in, time.Now()), nil
 }
 
 func osVersion() string {

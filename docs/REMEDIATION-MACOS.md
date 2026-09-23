@@ -32,14 +32,12 @@ they are managed, ask the IT owner.
 Open **System Settings → General → Software Update → Automatic Updates** and
 turn on **Check for updates**, **Download new updates when available**, and
 **Install Security Responses and system files**. Installing macOS updates
-automatically is recommended but not required. A waiting update is shown as a
-warning, not a failure; install it during an approved maintenance window.
+automatically is recommended but not required.
 
 ## Endpoint protection needs attention
 
 Leave Gatekeeper enabled and keep **Install Security Responses and system
 files** on: that setting is what keeps XProtect's malware definitions current.
-If the definitions are more than 30 days old the checker shows a warning;
-connecting to the internet for a while usually clears it. A managed
-organization may additionally require its approved endpoint-protection agent.
+A managed organization may additionally require its approved
+endpoint-protection agent.
 Do not bypass a Gatekeeper warning to fix this status.

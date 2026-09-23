@@ -50,9 +50,6 @@ func macObservation(in macInputs, now time.Time) posture.Observation {
 	if updates != nil {
 		ob.Updates = updates
 	}
-	if in.SoftwareUpdate != nil {
-		ob.Pending = macPendingUpdates(in.SoftwareUpdate, ob.OSVersion, now)
-	}
 	endpoint := &posture.EndpointFacts{Gatekeeper: parseGatekeeper(in.Spctl)}
 	if updates != nil {
 		endpoint.SystemDataUpdates = updates.SystemData
@@ -321,65 +318,6 @@ func macUpdateFacts(local, managed map[string]any, schedule *bool) *posture.Upda
 		facts.Check = &off
 	}
 	return facts
-}
-
-// macPendingUpdates counts RecommendedUpdates that are not major OS upgrades
-// (an identifier containing "_major", or an OS update whose display version's
-// major number is above the running macOS). Safari and other app updates
-// count. waiting_days is the age of the oldest counted offer when known.
-func macPendingUpdates(plist map[string]any, osVersion string, now time.Time) *posture.PendingFacts {
-	currentMajor := leadingInt(osVersion)
-	offers, _ := plist["FirstOfferDateDictionary"].(map[string]any)
-	items, _ := plist["RecommendedUpdates"].([]any)
-	count := 0
-	var oldest time.Time
-	for _, raw := range items {
-		item, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		identifier := plistString(item, "Identifier")
-		productKey := plistString(item, "Product Key")
-		if strings.Contains(identifier, "_major") || strings.Contains(productKey, "_major") {
-			continue
-		}
-		mobile, _ := plistBool(item, "MobileSoftwareUpdate")
-		isOS := mobile || strings.HasPrefix(identifier, "MSU_UPDATE_")
-		if isOS && currentMajor > 0 && leadingInt(plistString(item, "Display Version")) > currentMajor {
-			continue
-		}
-		count++
-		for _, key := range []string{identifier, productKey} {
-			if key == "" {
-				continue
-			}
-			if text, ok := offers[key].(string); ok {
-				if offered, ok := parsePlistDate(text); ok && (oldest.IsZero() || offered.Before(oldest)) {
-					oldest = offered
-				}
-			}
-		}
-	}
-	facts := &posture.PendingFacts{Count: &count}
-	if count > 0 && !oldest.IsZero() {
-		days := int(now.Sub(oldest).Hours() / 24)
-		if days < 0 {
-			days = 0
-		}
-		facts.WaitingDays = &days
-	}
-	return facts
-}
-
-// leadingInt returns the first run of digits in a version string, or 0.
-func leadingInt(version string) int {
-	version = strings.TrimSpace(version)
-	end := 0
-	for end < len(version) && version[end] >= '0' && version[end] <= '9' {
-		end++
-	}
-	value, _ := strconv.Atoi(version[:end])
-	return value
 }
 
 var (

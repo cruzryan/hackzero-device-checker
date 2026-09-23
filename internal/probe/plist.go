@@ -9,7 +9,6 @@ import (
 	"io"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // Property lists are read through Apple's own `plutil`, which converts any
@@ -216,29 +215,4 @@ func plistInt(dict map[string]any, key string) (int, bool) {
 		return i, err == nil
 	}
 	return 0, false
-}
-
-// plistString reads a string (numbers are formatted, so a "Display Version"
-// stored as the integer 27 still reads as "27").
-func plistString(dict map[string]any, key string) string {
-	switch v := dict[key].(type) {
-	case string:
-		return v
-	case int64:
-		return strconv.FormatInt(v, 10)
-	case float64:
-		return strconv.FormatFloat(v, 'f', -1, 64)
-	}
-	return ""
-}
-
-// parsePlistDate accepts the RFC 3339 form produced by plutil and the
-// `defaults read` form "2026-09-15 01:36:31 +0000".
-func parsePlistDate(value string) (time.Time, bool) {
-	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05 -0700"} {
-		if t, err := time.Parse(layout, strings.TrimSpace(value)); err == nil {
-			return t, true
-		}
-	}
-	return time.Time{}, false
 }

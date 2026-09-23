@@ -31,8 +31,8 @@ locally.
 ## Automatic updates are off
 
 Open **Settings → Windows Update**, turn on **Get the latest updates as soon as
-they're available**, and install pending updates. A managed organization may
-set this through policy; contact the IT owner if the setting is unavailable.
+they're available**, and select **Check for updates**. A managed organization
+may set this through policy; contact the IT owner if the setting is unavailable.
 
 ## Endpoint protection is off
 

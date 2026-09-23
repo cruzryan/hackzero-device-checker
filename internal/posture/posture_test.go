@@ -7,17 +7,16 @@ import (
 
 func TestEvaluateHealthyDevice(t *testing.T) {
 	truth := true
-	falsehood := false
 	ten := 10
 	at := time.Date(2026, 9, 4, 12, 0, 0, 0, time.FixedZone("local", -6*60*60))
 	report := Evaluate(Observation{
 		DiskEncryptionEnabled: &truth, ScreenLockEnabled: &truth, ScreenLockMinutes: &ten,
 		ScreenLockSecure:   &truth,
-		AutoUpdatesEnabled: &truth, PendingUpdates: &falsehood, EndpointProtection: &truth,
+		AutoUpdatesEnabled: &truth, EndpointProtection: &truth,
 	}, "windows", "11", "dev", at)
 	for name, signal := range map[string]Signal{
 		"encryption": report.DiskEncryption, "screen lock": report.ScreenLock,
-		"updates": report.AutomaticUpdates, "maintenance": report.PendingMaintenance,
+		"updates":    report.AutomaticUpdates,
 		"protection": report.EndpointProtection,
 	} {
 		if signal.Status != Pass {
@@ -26,18 +25,6 @@ func TestEvaluateHealthyDevice(t *testing.T) {
 	}
 	if report.CollectedAt.Location() != time.UTC {
 		t.Fatal("collection time must be UTC")
-	}
-}
-
-func TestPendingMaintenanceIsNotAConfigurationFailure(t *testing.T) {
-	truth := true
-	fifteen := 15
-	report := Evaluate(Observation{DiskEncryptionEnabled: &truth, ScreenLockEnabled: &truth, ScreenLockMinutes: &fifteen, ScreenLockSecure: &truth, AutoUpdatesEnabled: &truth, PendingUpdates: &truth, EndpointProtection: &truth}, "macos", "15", "dev", time.Now())
-	if report.AutomaticUpdates.Status != Pass {
-		t.Fatal("configured automatic updates must pass")
-	}
-	if report.PendingMaintenance.Status != NeedsAttention {
-		t.Fatal("pending work must be attention, not failure")
 	}
 }
 

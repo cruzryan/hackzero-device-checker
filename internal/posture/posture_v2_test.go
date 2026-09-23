@@ -3,6 +3,8 @@ package posture
 import (
 	"bytes"
 	"encoding/json"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -263,17 +265,29 @@ func TestWindowsUpdates(t *testing.T) {
 	}
 }
 
-func TestPendingIsAWarningOnly(t *testing.T) {
-	s := Evaluate(Observation{Pending: &PendingFacts{Count: ip(2), WaitingDays: ip(8)}}, "darwin", "", "", time.Now()).PendingMaintenance
-	if mustJSON(s) != `{"status":"needs_attention","code":"updates_pending","detail":{"count":2,"waiting_days":8}}` {
-		t.Fatal(mustJSON(s))
+func TestReportCarriesOnlyTheFourAC12Signals(t *testing.T) {
+	data, err := json.Marshal(FullReport(time.Date(2026, 9, 23, 18, 45, 26, 0, time.UTC)))
+	if err != nil {
+		t.Fatal(err)
 	}
-	s = Evaluate(Observation{Pending: &PendingFacts{Count: ip(0)}}, "darwin", "", "", time.Now()).PendingMaintenance
-	if mustJSON(s) != `{"status":"pass","detail":{"count":0}}` {
-		t.Fatal(mustJSON(s))
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
 	}
-	if s := Evaluate(Observation{Pending: &PendingFacts{}}, "darwin", "", "", time.Now()).PendingMaintenance; s.Status != Unknown {
-		t.Fatal(mustJSON(s))
+	var signals []string
+	for key := range fields {
+		switch key {
+		case "schema_version", "collected_at", "platform", "os_version", "checker_version":
+		default:
+			signals = append(signals, key)
+		}
+	}
+	sort.Strings(signals)
+	if got := strings.Join(signals, ","); got != "automatic_updates,disk_encryption,endpoint_protection,screen_lock" {
+		t.Fatalf("signals %s", got)
+	}
+	if strings.Contains(string(data), "warnings") {
+		t.Fatalf("nothing emits warnings: %s", data)
 	}
 }
 
@@ -285,15 +299,11 @@ func TestMacEndpoint(t *testing.T) {
 	if s := eval(ok); mustJSON(s) != `{"status":"pass","detail":{"gatekeeper":true,"system_data_updates":true,"definitions_version":5360,"definitions_age_days":4}}` {
 		t.Fatal(mustJSON(s))
 	}
-	stale := ok
-	stale.DefinitionsAgeDays = ip(31)
-	if s := eval(stale); s.Status != Pass || len(s.Warnings) != 1 || s.Warnings[0] != WarningDefinitionsStale {
-		t.Fatalf("stale definitions warn, never fail: %s", mustJSON(s))
-	}
-	edge := ok
-	edge.DefinitionsAgeDays = ip(30)
-	if s := eval(edge); len(s.Warnings) != 0 {
-		t.Fatal("30 days is not stale")
+	// The definitions age is a raw diagnostic fact: it never warns or fails.
+	old := ok
+	old.DefinitionsAgeDays = ip(400)
+	if s := eval(old); s.Status != Pass || s.Code != "" || len(s.Warnings) != 0 {
+		t.Fatalf("old definitions still pass: %s", mustJSON(s))
 	}
 	gk := ok
 	gk.Gatekeeper = bp(false)
@@ -320,18 +330,17 @@ func TestWindowsEndpoint(t *testing.T) {
 		name   string
 		f      EndpointFacts
 		status Status
-		warn   bool
 	}{
-		{"defender normal", EndpointFacts{DefenderRealtime: bp(true), DefenderMode: DefenderNormal, OtherAntivirus: ip(0), DefinitionsAgeDays: ip(1)}, Pass, false},
-		{"defender stale", EndpointFacts{DefenderRealtime: bp(true), DefenderMode: DefenderNormal, OtherAntivirus: ip(0), DefinitionsAgeDays: ip(8)}, Pass, true},
-		{"sentinelone with passive defender", EndpointFacts{DefenderRealtime: bp(false), DefenderMode: DefenderPassive, OtherAntivirus: ip(1), DefinitionsAgeDays: ip(40)}, Pass, false},
-		{"nothing on", EndpointFacts{DefenderRealtime: bp(false), DefenderMode: DefenderOff, OtherAntivirus: ip(0)}, Fail, false},
-		{"passive and nothing else", EndpointFacts{DefenderRealtime: bp(true), DefenderMode: DefenderPassive, OtherAntivirus: ip(0)}, Fail, false},
-		{"security center unreadable", EndpointFacts{DefenderRealtime: bp(false), DefenderMode: DefenderOff}, Unknown, false},
+		{"defender normal", EndpointFacts{DefenderRealtime: bp(true), DefenderMode: DefenderNormal, OtherAntivirus: ip(0), DefinitionsAgeDays: ip(1)}, Pass},
+		{"defender with old definitions", EndpointFacts{DefenderRealtime: bp(true), DefenderMode: DefenderNormal, OtherAntivirus: ip(0), DefinitionsAgeDays: ip(8)}, Pass},
+		{"sentinelone with passive defender", EndpointFacts{DefenderRealtime: bp(false), DefenderMode: DefenderPassive, OtherAntivirus: ip(1), DefinitionsAgeDays: ip(40)}, Pass},
+		{"nothing on", EndpointFacts{DefenderRealtime: bp(false), DefenderMode: DefenderOff, OtherAntivirus: ip(0)}, Fail},
+		{"passive and nothing else", EndpointFacts{DefenderRealtime: bp(true), DefenderMode: DefenderPassive, OtherAntivirus: ip(0)}, Fail},
+		{"security center unreadable", EndpointFacts{DefenderRealtime: bp(false), DefenderMode: DefenderOff}, Unknown},
 	}
 	for _, c := range cases {
 		s := eval(c.f)
-		if s.Status != c.status || (len(s.Warnings) > 0) != c.warn {
+		if s.Status != c.status || len(s.Warnings) != 0 {
 			t.Errorf("%s: %s", c.name, mustJSON(s))
 		}
 	}
@@ -340,7 +349,7 @@ func TestWindowsEndpoint(t *testing.T) {
 func TestLegacyReportShapeUnchanged(t *testing.T) {
 	at := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
 	got := mustJSON(Evaluate(Observation{}, "linux", "24.04", "dev", at))
-	want := `{"schema_version":1,"collected_at":"2026-09-04T12:00:00Z","platform":"linux","os_version":"24.04","checker_version":"dev","disk_encryption":{"status":"unknown","code":"signal_unavailable"},"screen_lock":{"status":"unknown","code":"signal_unavailable"},"automatic_updates":{"status":"unknown","code":"signal_unavailable"},"pending_maintenance":{"status":"unknown","code":"signal_unavailable"},"endpoint_protection":{"status":"unknown","code":"signal_unavailable"}}`
+	want := `{"schema_version":1,"collected_at":"2026-09-04T12:00:00Z","platform":"linux","os_version":"24.04","checker_version":"dev","disk_encryption":{"status":"unknown","code":"signal_unavailable"},"screen_lock":{"status":"unknown","code":"signal_unavailable"},"automatic_updates":{"status":"unknown","code":"signal_unavailable"},"endpoint_protection":{"status":"unknown","code":"signal_unavailable"}}`
 	if got != want {
 		t.Fatalf("\n got %s\nwant %s", got, want)
 	}
@@ -366,7 +375,6 @@ func FullReport(at time.Time) Report {
 		Disk:       &DiskFacts{State: DiskEncrypting, Percent: ip(42)},
 		ScreenLock: lock,
 		Updates:    &UpdateFacts{Check: bp(true), Download: bp(true), SecurityResponses: bp(true), SystemData: bp(true), OSInstall: bp(true), Paused: bp(false), PolicyDisabled: bp(false)},
-		Pending:    &PendingFacts{Count: ip(2), WaitingDays: ip(8)},
 		Endpoint:   &EndpointFacts{Gatekeeper: bp(true), SystemDataUpdates: bp(true), DefinitionsVersion: ip(5360), DefinitionsAgeDays: ip(45), DefenderRealtime: bp(true), DefenderMode: DefenderNormal, OtherAntivirus: ip(1)},
 	}, "darwin", "", "0.2.0", at)
 }

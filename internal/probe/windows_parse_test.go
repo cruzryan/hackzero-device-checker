@@ -112,7 +112,6 @@ func TestWindowsHealthyMachine(t *testing.T) {
 		`"disk_encryption":{"status":"pass","detail":{"state":"on"}},` +
 		`"screen_lock":{"status":"pass","detail":{"limit_minutes":15,"password":"immediate","password_delay_seconds":0,"active_power":"battery","profiles":[{"power":"ac","display_off_minutes":10,"lock_minutes":10,"ok":true},{"power":"battery","display_off_minutes":5,"lock_minutes":5,"ok":true}]}},` +
 		`"automatic_updates":{"status":"pass","detail":{"check":true,"download":true,"paused":false,"policy_disabled":false}},` +
-		`"pending_maintenance":{"status":"unknown","code":"signal_unavailable"},` +
 		`"endpoint_protection":{"status":"pass","detail":{"defender_realtime":true,"defender_mode":"normal","other_antivirus":0,"definitions_age_days":0}}}`
 	if string(data) != want {
 		t.Fatalf("\n got %s\nwant %s", data, want)
@@ -203,29 +202,28 @@ func TestWindowsEndpointProtection(t *testing.T) {
 		overrides map[string]any
 		status    posture.Status
 		other     int
-		warn      bool
 	}{
-		{"defender normal", nil, posture.Pass, 0, false},
+		{"defender normal", nil, posture.Pass, 0},
 		{"sentinelone with passive defender", map[string]any{
 			"defender":  map[string]any{"realtime": false, "antivirusEnabled": false, "mode": "Passive Mode", "signatureAge": 30},
 			"antivirus": []any{defenderPassive, sentinel},
-		}, posture.Pass, 1, false},
+		}, posture.Pass, 1},
 		{"single product object", map[string]any{
 			"defender":  map[string]any{"realtime": false, "antivirusEnabled": false, "mode": "Not running", "signatureAge": 3},
 			"antivirus": sentinel,
-		}, posture.Pass, 1, false},
+		}, posture.Pass, 1},
 		{"defender off, third party out of date", map[string]any{
 			"defender":  map[string]any{"realtime": false, "antivirusEnabled": true, "mode": "Normal", "signatureAge": 1},
 			"antivirus": []any{defenderPassive, map[string]any{"name": "Other AV", "guid": "{X}", "state": 397584}},
-		}, posture.Fail, 0, false},
-		{"stale defender definitions", map[string]any{
+		}, posture.Fail, 0},
+		{"old defender definitions still pass", map[string]any{
 			"defender": map[string]any{"realtime": true, "antivirusEnabled": true, "mode": "Normal", "signatureAge": 9},
-		}, posture.Pass, 0, true},
-		{"nothing readable", map[string]any{"defender": nil, "antivirus": nil}, posture.Unknown, -1, false},
+		}, posture.Pass, 0},
+		{"nothing readable", map[string]any{"defender": nil, "antivirus": nil}, posture.Unknown, -1},
 	}
 	for _, c := range cases {
 		s := windowsReport(t, c.overrides).EndpointProtection
-		if s.Status != c.status || (len(s.Warnings) > 0) != c.warn {
+		if s.Status != c.status || len(s.Warnings) != 0 {
 			data, _ := json.Marshal(s)
 			t.Errorf("%s: %s", c.name, data)
 			continue

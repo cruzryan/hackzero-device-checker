@@ -22,16 +22,15 @@ import (
 type Status string
 
 const (
-	Pass           Status = "pass"
-	Fail           Status = "fail"
-	NeedsAttention Status = "needs_attention"
-	Unknown        Status = "unknown"
+	Pass    Status = "pass"
+	Fail    Status = "fail"
+	Unknown Status = "unknown"
 )
 
 // LimitMinutes is the HackZero screen-lock policy limit. Exactly 15 passes.
 const LimitMinutes = 15
 
-// Reason and warning codes. They are part of the wire contract.
+// Reason codes. They are part of the wire contract.
 const (
 	CodeUnavailable = "signal_unavailable"
 
@@ -48,14 +47,10 @@ const (
 
 	CodeUpdatesDisabled = "automatic_updates_disabled"
 	CodeUpdatesPaused   = "automatic_updates_paused"
-	CodeUpdatesPending  = "updates_pending"
 
-	CodeGatekeeperDisabled      = "gatekeeper_disabled"
-	CodeDefinitionsUpdatesOff   = "definitions_updates_off"
-	CodeEndpointUnavailable     = "endpoint_protection_unavailable"
-	WarningDefinitionsStale     = "definitions_stale"
-	macDefinitionsStaleDays     = 30
-	windowsDefinitionsStaleDays = 7
+	CodeGatekeeperDisabled    = "gatekeeper_disabled"
+	CodeDefinitionsUpdatesOff = "definitions_updates_off"
+	CodeEndpointUnavailable   = "endpoint_protection_unavailable"
 )
 
 // Power profile names used in screen-lock detail.
@@ -126,7 +121,8 @@ func DecodeDetail[T any](d Detail) (T, error) {
 	return out, err
 }
 
-// Signal is one narrowly scoped, user-explainable local observation.
+// Signal is one narrowly scoped, user-explainable local observation. Warnings
+// stays in the contract (omitted when empty) but nothing emits one today.
 type Signal struct {
 	Status   Status   `json:"status"`
 	Code     string   `json:"code,omitempty"`
@@ -195,16 +191,10 @@ type UpdatesDetail struct {
 
 func (*UpdatesDetail) isDetail() {}
 
-// PendingDetail describes waiting minor/security updates.
-type PendingDetail struct {
-	Count       int  `json:"count"`
-	WaitingDays *int `json:"waiting_days,omitempty"`
-}
-
-func (*PendingDetail) isDetail() {}
-
 // EndpointDetail explains the endpoint-protection verdict. macOS fills the
 // Gatekeeper/XProtect fields, Windows the Defender/SecurityCenter fields.
+// DefinitionsVersion and DefinitionsAgeDays are raw facts for diagnostics only;
+// they never change the status.
 type EndpointDetail struct {
 	Gatekeeper         *bool  `json:"gatekeeper,omitempty"`
 	SystemDataUpdates  *bool  `json:"system_data_updates,omitempty"`
@@ -279,13 +269,6 @@ type UpdateFacts struct {
 	PolicyDisabled    *bool
 }
 
-// PendingFacts counts minor/security updates waiting to install, excluding
-// major OS upgrades. Count nil means unknown.
-type PendingFacts struct {
-	Count       *int
-	WaitingDays *int
-}
-
 // EndpointFacts are malware-protection facts.
 type EndpointFacts struct {
 	Gatekeeper         *bool
@@ -306,7 +289,6 @@ type Observation struct {
 	ScreenLockMinutes     *int
 	ScreenLockSecure      *bool
 	AutoUpdatesEnabled    *bool
-	PendingUpdates        *bool
 	EndpointProtection    *bool
 
 	OSVersion         string
@@ -314,7 +296,6 @@ type Observation struct {
 	ScreenLock        *ScreenLockFacts
 	WindowsScreenLock *WindowsScreenLockFacts
 	Updates           *UpdateFacts
-	Pending           *PendingFacts
 	Endpoint          *EndpointFacts
 }
 
@@ -329,7 +310,6 @@ type Report struct {
 	DiskEncryption     Signal    `json:"disk_encryption"`
 	ScreenLock         Signal    `json:"screen_lock"`
 	AutomaticUpdates   Signal    `json:"automatic_updates"`
-	PendingMaintenance Signal    `json:"pending_maintenance"`
 	EndpointProtection Signal    `json:"endpoint_protection"`
 }
 
@@ -347,7 +327,7 @@ func SanitizeToken(value string) string {
 }
 
 // Evaluate maps known facts to transparent outcomes. A definite failure beats
-// an unknown; a pending update is a warning, never a configuration failure.
+// an unknown.
 func Evaluate(ob Observation, platform, osVersion, checkerVersion string, at time.Time) Report {
 	if osVersion == "" {
 		osVersion = ob.OSVersion
@@ -365,7 +345,6 @@ func Evaluate(ob Observation, platform, osVersion, checkerVersion string, at tim
 		DiskEncryption:     diskSignal(ob),
 		ScreenLock:         screenLockSignal(ob),
 		AutomaticUpdates:   updatesSignal(ob, platform),
-		PendingMaintenance: pendingSignal(ob),
 		EndpointProtection: endpointSignal(ob, platform),
 	}
 }
@@ -725,27 +704,6 @@ func nilIfEmpty(d *UpdatesDetail) Detail {
 	return d
 }
 
-func pendingSignal(ob Observation) Signal {
-	if ob.Pending == nil {
-		if ob.PendingUpdates == nil {
-			return unknown()
-		}
-		if *ob.PendingUpdates {
-			return Signal{Status: NeedsAttention, Code: CodeUpdatesPending}
-		}
-		return Signal{Status: Pass}
-	}
-	if ob.Pending.Count == nil {
-		return unknown()
-	}
-	detail := &PendingDetail{Count: *ob.Pending.Count}
-	if *ob.Pending.Count > 0 {
-		detail.WaitingDays = ob.Pending.WaitingDays
-		return Signal{Status: NeedsAttention, Code: CodeUpdatesPending, Detail: detail}
-	}
-	return Signal{Status: Pass, Detail: detail}
-}
-
 func endpointSignal(ob Observation, platform string) Signal {
 	f := ob.Endpoint
 	if f == nil {
@@ -755,19 +713,15 @@ func endpointSignal(ob Observation, platform string) Signal {
 		return windowsEndpoint(*f)
 	}
 	detail := &EndpointDetail{Gatekeeper: f.Gatekeeper, SystemDataUpdates: f.SystemDataUpdates, DefinitionsVersion: f.DefinitionsVersion, DefinitionsAgeDays: f.DefinitionsAgeDays}
-	var warnings []string
-	if f.DefinitionsAgeDays != nil && *f.DefinitionsAgeDays > macDefinitionsStaleDays {
-		warnings = append(warnings, WarningDefinitionsStale)
-	}
 	switch {
 	case f.Gatekeeper != nil && !*f.Gatekeeper:
-		return Signal{Status: Fail, Code: CodeGatekeeperDisabled, Detail: detail, Warnings: warnings}
+		return Signal{Status: Fail, Code: CodeGatekeeperDisabled, Detail: detail}
 	case f.SystemDataUpdates != nil && !*f.SystemDataUpdates:
-		return Signal{Status: Fail, Code: CodeDefinitionsUpdatesOff, Detail: detail, Warnings: warnings}
+		return Signal{Status: Fail, Code: CodeDefinitionsUpdatesOff, Detail: detail}
 	case f.Gatekeeper == nil || f.SystemDataUpdates == nil:
-		return Signal{Status: Unknown, Code: CodeUnavailable, Detail: detail, Warnings: warnings}
+		return Signal{Status: Unknown, Code: CodeUnavailable, Detail: detail}
 	default:
-		return Signal{Status: Pass, Detail: detail, Warnings: warnings}
+		return Signal{Status: Pass, Detail: detail}
 	}
 }
 
@@ -781,11 +735,7 @@ func windowsEndpoint(f EndpointFacts) Signal {
 	defenderOK := f.DefenderRealtime != nil && *f.DefenderRealtime && detail.DefenderMode == DefenderNormal
 	otherOK := f.OtherAntivirus != nil && *f.OtherAntivirus >= 1
 	if defenderOK || otherOK {
-		var warnings []string
-		if defenderOK && !otherOK && f.DefinitionsAgeDays != nil && *f.DefinitionsAgeDays > windowsDefinitionsStaleDays {
-			warnings = append(warnings, WarningDefinitionsStale)
-		}
-		return Signal{Status: Pass, Detail: detail, Warnings: warnings}
+		return Signal{Status: Pass, Detail: detail}
 	}
 	defenderKnown := f.DefenderRealtime != nil && detail.DefenderMode != "" && detail.DefenderMode != DefenderUnknown
 	if defenderKnown && f.OtherAntivirus != nil {

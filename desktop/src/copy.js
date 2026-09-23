@@ -8,14 +8,14 @@
 // UI copy rule: no em dashes anywhere in the strings below.
 
 export const REQUIRED_SIGNALS = ["disk_encryption", "screen_lock", "automatic_updates", "endpoint_protection"];
-export const ROW_ORDER = [...REQUIRED_SIGNALS, "pending_maintenance"];
+// The window shows exactly the four SOC 2 AC-12 requirements, in this order.
+export const ROW_ORDER = REQUIRED_SIGNALS;
 
 export const LABELS = {
   disk_encryption: "Disk encryption",
   screen_lock: "Screen lock",
   automatic_updates: "Automatic updates",
-  endpoint_protection: "Malware protection",
-  pending_maintenance: "Pending updates"
+  endpoint_protection: "Malware protection"
 };
 
 export const REQUIREMENTS = {
@@ -26,14 +26,12 @@ export const REQUIREMENTS = {
     "A password is required when the screen wakes."
   ],
   automatic_updates: ["The computer checks for updates, downloads them, and installs security fixes automatically."],
-  endpoint_protection: ["Built-in malware protection is on: Gatekeeper and XProtect updates on a Mac, Microsoft Defender or another up-to-date antivirus on Windows."],
-  pending_maintenance: ["Waiting updates are a reminder only. They never make this device fail."]
+  endpoint_protection: ["Built-in malware protection is on: Gatekeeper and XProtect updates on a Mac, Microsoft Defender or another up-to-date antivirus on Windows."]
 };
 
 const STATUS_PILL = {
   pass: "Passing",
   fail: "Failing",
-  warn: "Warning",
   unknown: "Couldn't check",
   missing: "Not reported"
 };
@@ -72,7 +70,6 @@ function capitalize(text) {
 
 const ok = (text) => ({ tone: "ok", text });
 const bad = (text) => ({ tone: "fail", text });
-const warn = (text) => ({ tone: "warn", text });
 const unread = (text) => ({ tone: "unknown", text });
 const info = (text) => ({ tone: "info", text });
 
@@ -340,30 +337,6 @@ function updatesLines(signal, platform) {
   return lines;
 }
 
-// ---------------------------------------------------------------- pending updates
-
-export function pendingSentence(detail) {
-  const count = asInt(detail?.count);
-  const days = asInt(detail?.waiting_days);
-  let sentence;
-  if (count === 1) sentence = "1 update is waiting to install";
-  else if (count !== null && count > 1) sentence = `${count} updates are waiting to install`;
-  else sentence = "Updates are waiting to install";
-  if (days !== null && days > 0) {
-    const span = `${days} ${plural(days, "day", "days")}`;
-    sentence += count === 1 ? ` (for ${span})` : ` (the oldest for ${span})`;
-  }
-  return `${sentence}. Restart to finish ${count === 1 ? "it" : "them"}.`;
-}
-
-function pendingLines(signal, platform) {
-  const detail = isObject(signal.detail) ? signal.detail : {};
-  if (signal.status === "needs_attention" || signal.code === "updates_pending") return [warn(pendingSentence(detail))];
-  if (signal.status === "pass") return [ok("No updates are waiting to install.")];
-  if (signal.status === "unknown") return [unread(`We couldn't read whether updates are waiting on ${deviceNoun(platform)}.`)];
-  return [];
-}
-
 // ---------------------------------------------------------------- endpoint protection
 
 const GATEKEEPER_OFF = "Gatekeeper is off, so apps from unknown developers can open without a check. In Privacy & Security, set Allow applications from to App Store & Known Developers.";
@@ -371,10 +344,7 @@ const XPROTECT_OFF = 'XProtect data updates are off, so malware definitions stop
 
 function endpointLines(signal, platform) {
   const detail = isObject(signal.detail) ? signal.detail : {};
-  const warnings = Array.isArray(signal.warnings) ? signal.warnings : [];
-  const age = asInt(detail.definitions_age_days);
   const lines = [];
-  let handledStale = false;
 
   if (platform === "darwin") {
     const gatekeeper = asBool(detail.gatekeeper);
@@ -383,12 +353,6 @@ function endpointLines(signal, platform) {
     else if (gatekeeper === true) lines.push(ok("Gatekeeper is on."));
     if (updates === false || (updates === null && signal.code === "definitions_updates_off")) lines.push(bad(XPROTECT_OFF));
     else if (updates === true) lines.push(ok("XProtect updates are on."));
-    if (warnings.includes("definitions_stale")) {
-      handledStale = true;
-      lines.push(warn(`Apple's malware definitions last updated ${age !== null ? `${age} ${plural(age, "day", "days")} ago` : "more than 30 days ago"}. Open Software Update and check for updates to refresh them.`));
-    } else if (age !== null && (gatekeeper !== null || updates !== null)) {
-      lines.push(ok(`Malware definitions updated ${age === 0 ? "today" : `${age} ${plural(age, "day", "days")} ago`}.`));
-    }
     if (signal.status === "unknown") {
       if (gatekeeper === null) lines.push(unread("We couldn't read the Gatekeeper setting on this Mac."));
       if (updates === null) lines.push(unread("We couldn't read the XProtect update setting on this Mac."));
@@ -415,19 +379,11 @@ function endpointLines(signal, platform) {
       else if (mode === "off") defenderState = "Microsoft Defender is off";
       lines.push(bad(`${defenderState} and no other antivirus is on. Turn on Real-time protection in Windows Security > Virus & threat protection.`));
     }
-    if (warnings.includes("definitions_stale")) {
-      handledStale = true;
-      const who = defenderActive ? "Microsoft Defender" : "Antivirus";
-      lines.push(warn(`${who} definitions last updated ${age !== null ? `${age} ${plural(age, "day", "days")} ago` : "more than 7 days ago"}. Run Windows Update to refresh them.`));
-    }
     if (!lines.length && signal.status === "unknown") lines.push(unread("We couldn't read the Microsoft Defender status on this PC."));
   } else {
     if (signal.status === "pass") lines.push(ok("Malware protection is running."));
     if (signal.status === "fail") lines.push(bad(`No malware protection was found running on ${deviceNoun(platform)}.`));
     if (signal.status === "unknown") lines.push(unread(`We couldn't read the malware protection status on ${deviceNoun(platform)}.`));
-  }
-  if (!handledStale && warnings.includes("definitions_stale")) {
-    lines.push(warn(`Malware definitions last updated ${age !== null ? `${age} ${plural(age, "day", "days")} ago` : "a while ago"}. Check for updates to refresh them.`));
   }
   return lines;
 }
@@ -438,21 +394,20 @@ const BUILDERS = {
   disk_encryption: diskLines,
   screen_lock: screenLockLines,
   automatic_updates: updatesLines,
-  endpoint_protection: endpointLines,
-  pending_maintenance: pendingLines
+  endpoint_protection: endpointLines
 };
 
-const KNOWN_WARNINGS = new Set(["definitions_stale"]);
+const KNOWN_STATUSES = new Set(["pass", "fail", "unknown"]);
 
+// A row is exactly pass, fail, couldn't check, or not reported. Signal warnings
+// never change it (they appear only in Diagnostics), and a status this app does
+// not recognize is never presented as verified.
 export function rowState(signal) {
   if (!isObject(signal) || typeof signal.status !== "string") return "missing";
-  const warnings = Array.isArray(signal.warnings) ? signal.warnings : [];
   switch (signal.status) {
-    case "pass": return warnings.length ? "warn" : "pass";
+    case "pass": return "pass";
     case "fail": return "fail";
-    case "unknown": return "unknown";
-    // needs_attention and anything unexpected: never presented as verified.
-    default: return "warn";
+    default: return "unknown";
   }
 }
 
@@ -471,15 +426,10 @@ export function describeSignal(key, signal, platform) {
   if (state === "fail" && !lines.some((line) => line.tone === "fail")) {
     lines.push(bad("This setting is not on."));
   }
-  if (state === "unknown" && !lines.some((line) => line.tone === "unknown" || line.tone === "fail")) {
+  if (!KNOWN_STATUSES.has(signal.status)) {
+    lines = [unread("Device Checker sent a result this app doesn't recognize. Update Device Checker, then check again.")];
+  } else if (state === "unknown" && !lines.some((line) => line.tone === "unknown" || line.tone === "fail")) {
     lines.push(unread(`We couldn't read this setting on ${deviceNoun(platform)}.`));
-  }
-  const warnings = Array.isArray(signal.warnings) ? signal.warnings : [];
-  if (warnings.some((code) => !KNOWN_WARNINGS.has(code)) && !lines.some((line) => line.tone === "warn")) {
-    lines.push(warn("This setting has a warning. Open Diagnostics for details."));
-  }
-  if (state === "warn" && !lines.some((line) => line.tone === "warn" || line.tone === "fail")) {
-    lines.push(warn("This setting needs a look. Open Diagnostics for details."));
   }
   if (state !== "pass") {
     // A passing sentence alone must never stand for a non-passing row.
@@ -509,25 +459,22 @@ export function summarize(result) {
   const statusOf = (key) => (isObject(report[key]) ? report[key].status : undefined);
 
   const failed = REQUIRED_SIGNALS.filter((key) => statusOf(key) === "fail");
-  const attention = REQUIRED_SIGNALS.filter((key) => {
-    const status = statusOf(key);
-    return typeof status === "string" && !["pass", "fail", "unknown"].includes(status);
-  });
-  const unverified = REQUIRED_SIGNALS.filter((key) => statusOf(key) === "unknown" || typeof statusOf(key) !== "string");
+  // Anything that is not an explicit pass or fail (unknown, not reported, or a
+  // status this app does not recognize) is unverified, never green.
+  const unverified = REQUIRED_SIGNALS.filter((key) => statusOf(key) !== "pass" && statusOf(key) !== "fail");
   const passed = REQUIRED_SIGNALS.filter((key) => statusOf(key) === "pass");
   const server = serverVerdict(result);
   const serverFails = server?.status === "fail" || (server?.problems.length ?? 0) > 0;
-  const warningRows = rows.filter((row) => row.state === "warn").length;
 
   let tone;
   let headline;
   let description;
   let summaryStatus;
   let summaryDetail;
-  if (failed.length || attention.length || serverFails) {
+  if (failed.length || serverFails) {
     tone = "attention";
     headline = "This device needs attention";
-    const count = failed.length + attention.length;
+    const count = failed.length;
     if (count) {
       description = "Fix the items below, then check again. We only read these settings; we never change them.";
       summaryDetail = `${count} ${plural(count, "setting needs", "settings need")} attention`;
@@ -547,7 +494,7 @@ export function summarize(result) {
     headline = "This device is protected";
     description = "These security settings are on. We only read them; we never change anything on your device.";
     summaryStatus = "Device protected";
-    summaryDetail = `All ${passed.length} protections are on${warningRows ? `, ${warningRows} ${plural(warningRows, "thing", "things")} to look at` : ""}`;
+    summaryDetail = `All ${passed.length} protections are on`;
   } else {
     // Defensive: anything that is not explicitly all-pass is never green.
     tone = "verify";

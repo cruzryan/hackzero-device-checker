@@ -9,7 +9,6 @@ import {
   diagnosticsSections,
   diagnosticsText,
   profileSummary,
-  pendingSentence,
   REQUIRED_SIGNALS
 } from "../src/copy.js";
 
@@ -179,18 +178,41 @@ test("Windows update states", () => {
   assert.match(texts(updates(undefined, "unknown", "signal_unavailable", "windows"))[0], /Windows Update settings on this PC/);
 });
 
-// ------------------------------------------------------------ pending
+// ------------------------------------------------------------ exactly four rows
 
-test("pending updates are a warning, not a fail", () => {
-  const row = track(describeSignal("pending_maintenance", { status: "needs_attention", code: "updates_pending", detail: { count: 3, waiting_days: 38 } }, "darwin"));
-  assert.equal(row.state, "warn");
-  assert.deepEqual(texts(row), ["3 updates are waiting to install (the oldest for 38 days). Restart to finish them."]);
-  assert.equal(pendingSentence({ count: 1, waiting_days: 1 }), "1 update is waiting to install (for 1 day). Restart to finish it.");
-  assert.equal(pendingSentence({ count: 2, waiting_days: 0 }), "2 updates are waiting to install. Restart to finish them.");
-  // A pending warning never changes the headline.
+test("the window shows exactly the four AC-12 rows", () => {
   const result = passingResult();
+  // An older checker may still send pending updates: it is never shown and never changes the headline.
   result.report.pending_maintenance = { status: "needs_attention", code: "updates_pending", detail: { count: 3, waiting_days: 38 } };
-  assert.equal(summarize(result).tone, "protected");
+  const summary = summarize(result);
+  assert.deepEqual(summary.rows.map((row) => row.key), REQUIRED_SIGNALS);
+  assert.deepEqual(summary.rows.map((row) => row.label), ["Disk encryption", "Screen lock", "Automatic updates", "Malware protection"]);
+  assert.equal(summary.tone, "protected");
+  assert.equal(summary.summaryDetail, "All 4 protections are on");
+  for (const row of summary.rows) assert.doesNotMatch(texts(row).join(" "), /pending|waiting to install/i);
+});
+
+test("real Mac: battery 2 min, plugged in 30 min, password delay 300 s renders four rows", () => {
+  const result = passingResult();
+  result.report.screen_lock = {
+    status: "fail",
+    code: "screen_lock_timeout_too_long",
+    detail: { limit_minutes: 15, password: "delay", password_delay_seconds: 300, active_power: "ac", profiles: [{ power: "battery", display_off_minutes: 2, lock_minutes: 7, ok: true }, { power: "ac", display_off_minutes: 30, lock_minutes: 35, ok: false }] }
+  };
+  result.report.automatic_updates = { status: "pass", detail: { check: true, download: true, security_responses: true, system_data: true, os_install: true } };
+  result.report.endpoint_protection = { status: "pass", detail: { gatekeeper: true, system_data_updates: true, definitions_version: 5360, definitions_age_days: 4 } };
+  const summary = summarize(result);
+  assert.equal(summary.tone, "attention");
+  assert.equal(summary.summaryDetail, "1 setting needs attention");
+  assert.deepEqual(summary.rows.map((row) => [row.label, row.pill, texts(row)]), [
+    ["Disk encryption", "Passing", ["FileVault is on."]],
+    ["Screen lock", "Failing", [
+      "Plugged in: the screen turns off after 30 min and asks for a password 5 min later, so it locks after 35 min. Set it so the total is 15 min or less.",
+      "On battery: locks after 7 min."
+    ]],
+    ["Automatic updates", "Passing", ["Checking, downloading, and Security Responses are all set to happen automatically."]],
+    ["Malware protection", "Passing", ["Gatekeeper is on.", "XProtect updates are on."]]
+  ]);
 });
 
 // ------------------------------------------------------------ endpoint
@@ -200,9 +222,15 @@ const endpoint = (detail, status, code, warnings, platform = "darwin") => track(
 test("macOS endpoint protection", () => {
   assert.match(texts(endpoint({ gatekeeper: false, system_data_updates: true }, "fail", "gatekeeper_disabled"))[0], /^Gatekeeper is off/);
   assert.ok(texts(endpoint({ gatekeeper: true, system_data_updates: false }, "fail", "definitions_updates_off")).some((text) => text.startsWith("XProtect data updates are off")));
-  const stale = endpoint({ gatekeeper: true, system_data_updates: true, definitions_version: 5300, definitions_age_days: 45 }, "pass", undefined, ["definitions_stale"]);
-  assert.equal(stale.state, "warn");
-  assert.ok(texts(stale).some((text) => text.startsWith("Apple's malware definitions last updated 45 days ago.")));
+  // Old definitions are a Diagnostics fact only: no warning, no amber state, no extra line.
+  const old = endpoint({ gatekeeper: true, system_data_updates: true, definitions_version: 5300, definitions_age_days: 45 }, "pass");
+  assert.equal(old.state, "pass");
+  assert.equal(old.pill, "Passing");
+  assert.deepEqual(texts(old), ["Gatekeeper is on.", "XProtect updates are on."]);
+  // A warning from an older checker never changes the row either.
+  const legacy = endpoint({ gatekeeper: true, system_data_updates: true, definitions_age_days: 45 }, "pass", undefined, ["definitions_stale"]);
+  assert.equal(legacy.state, "pass");
+  assert.deepEqual(texts(legacy), ["Gatekeeper is on.", "XProtect updates are on."]);
   assert.match(texts(endpoint(undefined, "fail", "gatekeeper_disabled"))[0], /^Gatekeeper is off/);
   assert.match(texts(endpoint(undefined, "fail", "definitions_updates_off"))[0], /^XProtect data updates are off/);
   assert.match(texts(endpoint(undefined, "fail", "endpoint_protection_unavailable"))[0], /Gatekeeper or XProtect/);
@@ -212,15 +240,16 @@ test("Windows endpoint protection", () => {
   assert.deepEqual(texts(endpoint({ defender_realtime: true, defender_mode: "normal", other_antivirus: 0, definitions_age_days: 1 }, "pass", undefined, undefined, "windows")), ["Microsoft Defender real-time protection is on."]);
   assert.deepEqual(texts(endpoint({ defender_realtime: false, defender_mode: "passive", other_antivirus: 1, definitions_age_days: 1 }, "pass", undefined, undefined, "windows")), ["Another antivirus is on and up to date."]);
   assert.match(texts(endpoint({ defender_realtime: false, defender_mode: "passive", other_antivirus: 0 }, "fail", "endpoint_protection_unavailable", undefined, "windows")).join(" "), /passive mode and no other antivirus is on/);
-  const stale = endpoint({ defender_realtime: true, defender_mode: "normal", other_antivirus: 0, definitions_age_days: 9 }, "pass", undefined, ["definitions_stale"], "windows");
-  assert.ok(texts(stale).includes("Microsoft Defender definitions last updated 9 days ago. Run Windows Update to refresh them."));
+  const old = endpoint({ defender_realtime: true, defender_mode: "normal", other_antivirus: 0, definitions_age_days: 9 }, "pass", undefined, undefined, "windows");
+  assert.equal(old.state, "pass");
+  assert.deepEqual(texts(old), ["Microsoft Defender real-time protection is on."]);
   assert.match(texts(endpoint(undefined, "fail", "endpoint_protection_unavailable", undefined, "windows"))[0], /^Real-time antivirus protection is not on/);
 });
 
 // ------------------------------------------------------------ generic rules
 
 test("an unmapped failure code gets a specific generic failure, never 'verified'", () => {
-  for (const key of [...REQUIRED_SIGNALS, "pending_maintenance"]) {
+  for (const key of REQUIRED_SIGNALS) {
     for (const platform of ["darwin", "windows", "linux"]) {
       const row = track(describeSignal(key, { status: "fail", code: "brand_new_code_2027" }, platform));
       assert.equal(row.state, "fail");
@@ -231,13 +260,16 @@ test("an unmapped failure code gets a specific generic failure, never 'verified'
   assert.deepEqual(texts(track(describeSignal("screen_lock", { status: "fail", code: "brand_new_code_2027" }, "darwin"))), ["This setting is not on."]);
 });
 
-test("needs_attention on a required signal never reads verified and blocks green", () => {
+test("an unrecognized status on a required signal never reads verified and blocks green", () => {
   const result = passingResult();
   result.report.disk_encryption = { status: "needs_attention", code: "something_new" };
   const summary = summarize(result);
   assert.notEqual(summary.tone, "protected");
   const row = summary.rows.find((r) => r.key === "disk_encryption");
-  assert.equal(row.state, "warn");
+  assert.equal(row.state, "unknown");
+  assert.equal(row.pill, "Couldn't check");
+  assert.equal(summary.tone, "verify");
+  assert.deepEqual(texts(row), ["Device Checker sent a result this app doesn't recognize. Update Device Checker, then check again."]);
   assert.ok(!texts(row).join(" ").toLowerCase().includes("verified"));
   assert.ok(row.lines.length > 0);
 });
@@ -256,8 +288,7 @@ function passingResult() {
       disk_encryption: { status: "pass", detail: { state: "on" } },
       screen_lock: { status: "pass", detail: { password: "immediate", profiles: [{ power: "ac", display_off_minutes: 10, lock_minutes: 10, ok: true }] } },
       automatic_updates: { status: "pass", detail: { check: true, download: true, security_responses: true } },
-      endpoint_protection: { status: "pass", detail: { gatekeeper: true, system_data_updates: true } },
-      pending_maintenance: { status: "pass" }
+      endpoint_protection: { status: "pass", detail: { gatekeeper: true, system_data_updates: true } }
     },
     server: { status: "pass", problems: [], warnings: [] }
   };
@@ -349,7 +380,8 @@ test("diagnostics show every signal with detail and never private material", () 
   assert.match(text, /Screen lock profile: On battery: display off 2 min, lock 7 min, OK/);
   assert.match(text, /Screen lock: status fail; code screen_lock_timeout_too_long/);
   assert.match(text, /Screen lock password delay seconds: 300/);
-  for (const label of ["Disk encryption", "Automatic updates", "Malware protection", "Pending updates"]) assert.match(text, new RegExp(`${label}: status`));
+  for (const label of ["Disk encryption", "Automatic updates", "Malware protection"]) assert.match(text, new RegExp(`${label}: status`));
+  assert.doesNotMatch(text, /Pending updates/);
   assert.match(text, /Delivery: uploaded/);
   assert.match(text, /HTTP status: 200/);
   assert.doesNotMatch(text, /SECRET-SHOULD-NOT-APPEAR/);
@@ -365,7 +397,7 @@ test("diagnostics fall back when the collector has no diagnose command", () => {
 // ------------------------------------------------------------ copy rules
 
 test("no em dashes in any copy", () => {
-  for (const text of allStrings) assert.ok(!text.includes("2014"), text);
+  for (const text of allStrings) assert.ok(!text.includes("—"), text);
   const source = readFileSync(new URL("../src/copy.js", import.meta.url), "utf8");
-  assert.ok(!source.includes("2014"));
+  assert.ok(!source.includes("—"));
 });

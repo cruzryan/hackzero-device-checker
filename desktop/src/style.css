@@ -459,9 +459,7 @@ h1 {
   color: #c24b40;
 }
 .finding.unknown .indicator,
-.finding.needs_attention .indicator,
-.unknown .result,
-.needs_attention .result {
+.unknown .result {
   color: #9c7d20;
 }
 .result {
@@ -1008,22 +1006,6 @@ footer {
 }
 .detail-lines .line.info:before {
   content: "·";
-}
-/* Warning rows (pending updates, stale definitions, unexpected statuses). */
-.app-shell:not(.unpaired) .finding.warn {
-  border-color: #f1dcb4;
-  background: linear-gradient(120deg, #fffaf1, #fff);
-}
-.app-shell:not(.unpaired) .finding.warn .indicator {
-  color: #b0701a;
-  background: linear-gradient(135deg, #fcedd2, #fff8ec);
-}
-.app-shell:not(.unpaired) .finding.warn strong {
-  color: #8d5d16;
-}
-.app-shell:not(.unpaired) .finding.warn .status-pill {
-  color: #93601a;
-  background: #fbf0dc;
 }
 /* A required signal the checker did not report. */
 .app-shell:not(.unpaired) .finding.missing {

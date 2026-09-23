@@ -21,9 +21,9 @@ installed-app inventories, or accept commands from the service.
 | Automatic OS updates | update configuration | Windows Update configuration | unattended upgrades |
 | Endpoint protection | XProtect + Gatekeeper | Microsoft Defender | supported antimalware service |
 
-Automatic-update configuration and a pending update are deliberately different:
-disabled automatic updates is a failed configuration; an enabled device waiting
-for its normal maintenance window is reported as `needs_attention`, not failed.
+These four SOC 2 AC-12 requirements are the only things the checker checks and
+shows. Each is pass, fail, or unknown. Waiting updates and the age of malware
+definitions are not requirements, so they are not reported.
 
 ## Privacy and security boundaries
 

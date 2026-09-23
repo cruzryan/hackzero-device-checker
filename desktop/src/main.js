@@ -82,7 +82,7 @@ function friendlyTime(date) {
 
 // ------------------------------------------------------------------ rendering
 
-const INDICATOR = { pass: "✓", fail: "!", warn: "!", unknown: "?", missing: "?" };
+const INDICATOR = { pass: "✓", fail: "!", unknown: "?", missing: "?" };
 
 function requirementPanel(key) {
   const rules = REQUIREMENTS[key];

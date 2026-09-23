@@ -5,7 +5,7 @@ The checker is designed around four local components:
 1. **Probe** — a platform-specific, read-only implementation obtains a narrow
    set of operating-system security signals.
 2. **Evaluator** — pure Go maps raw observations to `pass`, `fail`, or
-   `needs_attention`. This is deterministic and independently unit tested.
+   `unknown`. This is deterministic and independently unit tested.
 3. **Identity** — browser pairing uses a short-lived, one-time approval
    code and a locally generated key pair. The browser session never enters the
    client.
