@@ -12,10 +12,21 @@ approved recovery location before proceeding.
 
 ## Screen lock needs attention
 
-Open **Settings → Personalization → Lock screen → Screen saver**. Enable a
-screen saver, choose **On resume, display logon screen**, and set **Wait** to
-15 minutes or less. If the organization manages this setting, ask the IT owner
-to correct the policy rather than changing it locally.
+Any one of these passes:
+
+- Open **Settings → System → Power & battery → Screen and sleep** and set the
+  screen to turn off after 15 minutes or less **both** on battery and when
+  plugged in. Then open **Settings → Accounts → Sign-in options** and set **If
+  you've been away, when should Windows require you to sign in again?** to
+  **Every time** (or a delay that keeps the total at 15 minutes or less).
+  **Never** fails.
+- Or open **Settings → Personalization → Lock screen → Screen saver**, enable a
+  screen saver, choose **On resume, display logon screen**, and set **Wait** to
+  15 minutes or less.
+
+If the organization manages these settings (for example with an inactivity
+limit policy), ask the IT owner to correct the policy rather than changing it
+locally.
 
 ## Automatic updates are off
 

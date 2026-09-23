@@ -85,7 +85,7 @@ func collect() screenModel {
 	if err != nil {
 		observation = posture.Observation{}
 	}
-	report := posture.Evaluate(observation, runtime.GOOS, runtime.GOOS, version, time.Now())
+	report := posture.Evaluate(observation, runtime.GOOS, "", version, time.Now())
 	signals := []struct {
 		label  string
 		signal posture.Signal

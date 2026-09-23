@@ -1,0 +1,207 @@
+package reporting
+
+import (
+	"bytes"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/hackzero/device-checker/internal/identity"
+	"github.com/hackzero/device-checker/internal/posture"
+)
+
+// TEST-ONLY signing seed. It is public in this repository and must never be
+// used for a real device; it exists so the server's Python signature check
+// can be proven against envelopes this Go code signs.
+var testOnlySeed = []byte("TEST-ONLY-device-checker-v2-seed")
+
+const testOnlyDeviceID = "test-only-v2-fixture-device"
+
+// fixtureEnvVar names the file to (re)write the server fixture to, e.g.
+// hackzero/backend/apps/trust/tests/fixtures/device_checker_v2_envelope.json.
+const fixtureEnvVar = "DEVICE_CHECKER_V2_FIXTURE"
+
+func ip(v int) *int   { return &v }
+func bp(v bool) *bool { return &v }
+
+// macFixtureReport is the real MacBook Air case: battery display-off 2 min,
+// AC 30 min, password 300 s after sleep, plus a 20 minute screen saver.
+func macFixtureReport(at time.Time) posture.Report {
+	return posture.Evaluate(posture.Observation{
+		OSVersion: "26.5.2",
+		Disk:      &posture.DiskFacts{State: posture.DiskEncrypting, Percent: ip(42)},
+		ScreenLock: &posture.ScreenLockFacts{
+			Password: posture.PasswordDelay, PasswordDelaySeconds: ip(300),
+			ScreensaverSeconds: ip(1200), ScreensaverKnown: true, ActivePower: posture.PowerBattery,
+			Profiles: []posture.ProfileFacts{{Power: posture.PowerBattery, DisplayOffSeconds: ip(120)}, {Power: posture.PowerAC, DisplayOffSeconds: ip(1800)}},
+		},
+		Updates:  &posture.UpdateFacts{Check: bp(true), Download: bp(true), SecurityResponses: bp(true), SystemData: bp(true), OSInstall: bp(false)},
+		Pending:  &posture.PendingFacts{Count: ip(2), WaitingDays: ip(8)},
+		Endpoint: &posture.EndpointFacts{Gatekeeper: bp(true), SystemDataUpdates: bp(true), DefinitionsVersion: ip(5360), DefinitionsAgeDays: ip(45)},
+	}, "darwin", "", "0.2.0", at)
+}
+
+func windowsFixtureReport(at time.Time) posture.Report {
+	return posture.Evaluate(posture.Observation{
+		OSVersion: "10.0.26200",
+		Disk:      &posture.DiskFacts{State: posture.DiskSuspended},
+		WindowsScreenLock: &posture.WindowsScreenLockFacts{
+			ScreensaverConfigured: bp(false), DisplayOffACSeconds: ip(600), DisplayOffDCSeconds: ip(300),
+			ConsoleLockAC: bp(true), ConsoleLockDC: bp(true), DelayLockSeconds: ip(60), ActivePower: posture.PowerAC,
+		},
+		Updates:  &posture.UpdateFacts{Check: bp(true), Download: bp(true), Paused: bp(true), PolicyDisabled: bp(false)},
+		Endpoint: &posture.EndpointFacts{DefenderRealtime: bp(false), DefenderMode: posture.DefenderPassive, OtherAntivirus: ip(1), DefinitionsAgeDays: ip(12)},
+	}, "windows", "", "0.2.0", at)
+}
+
+// allFieldsReport populates every detail key and a warning on every signal.
+func allFieldsReport(at time.Time) posture.Report {
+	warn := []string{posture.WarningDefinitionsStale}
+	return posture.Report{
+		SchemaVersion: 1, CollectedAt: at, Platform: "darwin", OSVersion: "26.5.2", CheckerVersion: "0.2.0",
+		DiskEncryption: posture.Signal{Status: posture.Pass, Detail: &posture.DiskDetail{State: posture.DiskEncrypting, Percent: ip(42)}, Warnings: warn},
+		ScreenLock: posture.Signal{Status: posture.Fail, Code: posture.CodeScreenLockTooLong, Warnings: warn, Detail: &posture.ScreenLockDetail{
+			LimitMinutes: 15, Password: posture.PasswordDelay, PasswordDelaySeconds: ip(300), ScreensaverMinutes: ip(20), ActivePower: posture.PowerBattery,
+			Profiles: []posture.ProfileDetail{
+				{Power: posture.PowerBattery, DisplayOffMinutes: ip(2), LockMinutes: ip(7), OK: true},
+				{Power: posture.PowerAC, DisplayOffMinutes: ip(30), LockMinutes: ip(25), OK: false},
+				{Power: posture.PowerUPS, DisplayOffMinutes: ip(0), LockMinutes: ip(0), OK: false},
+				{Power: posture.PowerAny, DisplayOffMinutes: ip(5), LockMinutes: ip(10), OK: true},
+			},
+		}},
+		AutomaticUpdates: posture.Signal{Status: posture.Fail, Code: posture.CodeUpdatesPaused, Warnings: warn, Detail: &posture.UpdatesDetail{
+			Check: bp(true), Download: bp(true), SecurityResponses: bp(true), SystemData: bp(false), OSInstall: bp(false), Paused: bp(true), PolicyDisabled: bp(false),
+		}},
+		PendingMaintenance: posture.Signal{Status: posture.NeedsAttention, Code: posture.CodeUpdatesPending, Warnings: warn, Detail: &posture.PendingDetail{Count: 2, WaitingDays: ip(8)}},
+		EndpointProtection: posture.Signal{Status: posture.Pass, Warnings: warn, Detail: &posture.EndpointDetail{
+			Gatekeeper: bp(true), SystemDataUpdates: bp(true), DefinitionsVersion: ip(5360),
+			DefenderRealtime: bp(true), DefenderMode: posture.DefenderEDRBlock, OtherAntivirus: ip(3), DefinitionsAgeDays: ip(45),
+		}},
+	}
+}
+
+type serverFixture struct {
+	Comment   string     `json:"_comment"`
+	DeviceID  string     `json:"device_id"`
+	PublicKey string     `json:"public_key"`
+	Envelopes []Envelope `json:"envelopes"`
+}
+
+func buildServerFixture(t *testing.T) []byte {
+	t.Helper()
+	device, err := identity.FromSeed(testOnlyDeviceID, testOnlySeed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 9, 23, 18, 45, 26, 597371000, time.UTC)
+	fixture := serverFixture{
+		Comment:   "TEST-ONLY. Generated by internal/reporting/fixture_test.go in hackzero-device-checker from a public, fixed Ed25519 seed. Proves Python verifies Go v2 signatures. Never trust this key.",
+		DeviceID:  device.ID,
+		PublicKey: device.PublicKey,
+	}
+	for _, report := range []posture.Report{macFixtureReport(at), windowsFixtureReport(at), allFieldsReport(at)} {
+		envelope, err := NewEnvelope(device, report, at.Add(time.Second))
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixture.Envelopes = append(fixture.Envelopes, envelope)
+	}
+	heartbeat, err := NewHeartbeat(device, at.Add(2*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.Envelopes = append(fixture.Envelopes, heartbeat)
+	data, err := json.MarshalIndent(fixture, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(data, '\n')
+}
+
+func TestV2ServerFixture(t *testing.T) {
+	first := buildServerFixture(t)
+	if !bytes.Equal(first, buildServerFixture(t)) {
+		t.Fatal("fixture must be deterministic")
+	}
+	var decoded serverFixture
+	if err := json.Unmarshal(first, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	for i, envelope := range decoded.Envelopes {
+		if !envelope.Verify() {
+			t.Fatalf("envelope %d does not verify after a JSON round trip", i)
+		}
+		payload, _ := json.Marshal(envelope)
+		for _, b := range payload {
+			if b >= 0x80 || b == '<' || b == '>' || b == '&' {
+				t.Fatalf("envelope %d has a signature-unsafe byte %q", i, b)
+			}
+		}
+	}
+	if path := os.Getenv(fixtureEnvVar); path != "" {
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, first, 0644); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("wrote %s", path)
+	}
+}
+
+func TestQueuedV2ReportStillVerifies(t *testing.T) {
+	device, err := identity.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 9, 23, 18, 0, 0, 0, time.UTC)
+	envelope, err := NewEnvelope(device, allFieldsReport(at), at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spool := Spool{Directory: filepath.Join(t.TempDir(), "queue"), MaxItems: 5}
+	if _, err := spool.Queue(envelope); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := spool.Pending()
+	if err != nil || len(pending) != 1 || !pending[0].Envelope.Verify() {
+		t.Fatalf("pending=%v err=%v", pending, err)
+	}
+	if spool.Count() != 1 {
+		t.Fatal("count")
+	}
+}
+
+func TestSpoolMovesCorruptFilesAside(t *testing.T) {
+	d, _ := identity.New()
+	spool := Spool{Directory: filepath.Join(t.TempDir(), "queue"), MaxItems: 5}
+	e, _ := NewEnvelope(d, posture.Report{SchemaVersion: 1}, time.Now())
+	if _, err := spool.Queue(e); err != nil {
+		t.Fatal(err)
+	}
+	bad := filepath.Join(spool.Directory, "bad.json")
+	tampered := e
+	tampered.Signature = "tampered"
+	data, _ := json.Marshal(tampered)
+	if err := os.WriteFile(bad, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	garbage := filepath.Join(spool.Directory, "garbage.json")
+	if err := os.WriteFile(garbage, []byte("\x00\x01"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := spool.Pending()
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("pending=%d err=%v", len(pending), err)
+	}
+	for _, path := range []string{bad, garbage} {
+		if _, err := os.Stat(path + CorruptSuffix); err != nil {
+			t.Fatalf("%s not moved aside: %v", path, err)
+		}
+	}
+	if spool.Count() != 1 {
+		t.Fatalf("count %d", spool.Count())
+	}
+}

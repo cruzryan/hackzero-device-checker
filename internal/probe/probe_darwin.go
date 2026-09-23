@@ -3,62 +3,139 @@
 package probe
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
+	"os/user"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
 
 	"github.com/hackzero/device-checker/internal/posture"
 )
 
-// xProtectBundlePaths lists the known on-disk locations of Apple's XProtect
-// bundle, current layout first. macOS 10.15 (Catalina, 2019) and later moved
-// the bundle onto the read-only system volume under /Library/Apple; older
-// systems kept it under /System/Library. A hit at either path is authoritative;
-// finding it at neither is unknown, never proof that protection is absent.
-var xProtectBundlePaths = []string{
-	"/Library/Apple/System/Library/CoreServices/XProtect.bundle",
-	"/System/Library/CoreServices/XProtect.bundle",
+const (
+	softwareUpdatePlist        = "/Library/Preferences/com.apple.SoftwareUpdate.plist"
+	managedSoftwareUpdatePlist = "/Library/Managed Preferences/com.apple.SoftwareUpdate.plist"
+	managedPreferencesDir      = "/Library/Managed Preferences"
+	xprotectInfoPlist          = "/Library/Apple/System/Library/CoreServices/XProtect.bundle/Contents/Info.plist"
+	commandTimeout             = 20 * time.Second
+)
+
+// collect uses documented macOS command-line status interfaces, run as the
+// logged-in user. A command that is absent, denied, or ambiguous leaves its
+// signal unknown; it never turns an inconclusive response into a passing
+// result. Parsing lives in pure helpers (darwin_parse.go) so it can be
+// unit-tested without macOS.
+func collect() (posture.Observation, error) {
+	in := macInputs{
+		ProductVersion: commandOutput("/usr/bin/sw_vers", "-productVersion"),
+		FileVault:      commandOutput("/usr/bin/fdesetup", "status"),
+		ConsoleSession: inConsoleSession(),
+		Schedule:       commandOutput("/usr/sbin/softwareupdate", "--schedule"),
+		Spctl:          commandOutput("/usr/sbin/spctl", "--status"),
+		XProtect:       commandOutput("/usr/bin/xprotect", "version"),
+	}
+	if in.ConsoleSession {
+		in.PmsetCustom = commandOutput("/usr/bin/pmset", "-g", "custom")
+		in.PmsetBatt = commandOutput("/usr/bin/pmset", "-g", "batt")
+		in.Sysadminctl = commandOutput("/usr/sbin/sysadminctl", "-screenLock", "status")
+		// Exits 1 with "does not exist" when unset: keep that output.
+		in.ScreensaverIdle = commandOutputAnyExit("/usr/bin/defaults", "-currentHost", "read", "com.apple.screensaver", "idleTime")
+		in.ManagedScreensaver = managedScreensaver()
+	}
+	local, localErr := readPlist(softwareUpdatePlist)
+	switch {
+	case localErr == nil:
+		in.SoftwareUpdate = local
+	case errors.Is(localErr, os.ErrNotExist):
+		// No preferences file: every key is at its default (on). Pending
+		// updates stay unknown because no scan result is recorded.
+		in.SoftwareUpdate = map[string]any{}
+	}
+	if managed, err := readPlist(managedSoftwareUpdatePlist); err == nil {
+		in.ManagedSoftwareUpdate = managed
+	}
+	if in.XProtect == nil {
+		in.XProtectVersion = commandOutput("/usr/bin/defaults", "read", xprotectInfoPlist, "CFBundleShortVersionString")
+	}
+	ob := macObservation(in, time.Now())
+	if localErr != nil {
+		ob.Pending = nil
+	}
+	return ob, nil
 }
 
-// collect uses documented macOS command-line status interfaces. A command that
-// is absent, denied, or ambiguous leaves its signal unknown; it never turns an
-// inconclusive response into a passing result. Parsing lives in pure helpers
-// (darwin_parse.go) so it can be unit-tested without macOS.
-func collect() (posture.Observation, error) {
-	fileVault := parseFileVault(commandOutput("/usr/bin/fdesetup", "status"))
-	updates := parseAutomaticUpdates(commandOutput("/usr/sbin/softwareupdate", "--schedule"))
-	gatekeeper := parseGatekeeper(commandOutput("/usr/sbin/spctl", "--status"))
-	xProtect := anyPathExists(xProtectBundlePaths)
-
-	var protection *bool
-	if gatekeeper != nil && xProtect != nil {
-		value := *gatekeeper && *xProtect
-		protection = &value
+func osVersion() string {
+	if output := commandOutput("/usr/bin/sw_vers", "-productVersion"); output != nil {
+		return posture.SanitizeToken(strings.TrimSpace(*output))
 	}
+	return ""
+}
 
-	// Screen lock is only readable in the logged-in user's GUI session, which is
-	// where this collector runs when launched from the tray app. sysadminctl
-	// reports whether a password is required on wake; the display-sleep and
-	// screensaver idle timeouts give how soon the screen darkens and locks.
-	lockEnabled, lockSecure := parseScreenLock(commandOutput("/usr/sbin/sysadminctl", "-screenLock", "status"))
-	displaySleep := parsePmsetDisplaySleep(commandOutput("/usr/bin/pmset", "-g"))
-	screensaverIdle := parseIntOutput(commandOutput("/usr/bin/defaults", "-currentHost", "read", "com.apple.screensaver", "idleTime"))
-	lockMinutes := screenLockMinutes(displaySleep, screensaverIdle)
+// inConsoleSession reports whether this process belongs to the user who owns
+// the GUI console (/dev/console). Screen-lock settings are per user.
+func inConsoleSession() bool {
+	info, err := os.Stat("/dev/console")
+	if err != nil {
+		return false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return false
+	}
+	return consoleSession(stat.Uid, uint32(os.Getuid()))
+}
 
-	return posture.Observation{
-		DiskEncryptionEnabled: fileVault,
-		AutoUpdatesEnabled:    updates,
-		EndpointProtection:    protection,
-		ScreenLockEnabled:     lockEnabled,
-		ScreenLockMinutes:     lockMinutes,
-		ScreenLockSecure:      lockSecure,
-	}, nil
+// managedScreensaver returns an MDM-forced screen-saver payload, user level
+// first, then device level, or nil when none is installed.
+func managedScreensaver() map[string]any {
+	var paths []string
+	if current, err := user.Current(); err == nil && current.Username != "" && !strings.ContainsAny(current.Username, `/\`) {
+		paths = append(paths, filepath.Join(managedPreferencesDir, current.Username, "com.apple.screensaver.plist"))
+	}
+	paths = append(paths, filepath.Join(managedPreferencesDir, "com.apple.screensaver.plist"))
+	for _, path := range paths {
+		if plist, err := readPlist(path); err == nil {
+			return plist
+		}
+	}
+	return nil
+}
+
+// readPlist converts a property list with Apple's plutil, trying JSON first
+// and falling back to XML for plists holding dates or data.
+func readPlist(path string) (map[string]any, error) {
+	if _, err := os.Stat(path); err != nil {
+		return nil, err
+	}
+	if output, err := run("/usr/bin/plutil", "-convert", "json", "-o", "-", path); err == nil {
+		if plist, err := decodePlistJSON(output); err == nil {
+			return plist, nil
+		}
+	}
+	output, err := run("/usr/bin/plutil", "-convert", "xml1", "-o", "-", path)
+	if err != nil {
+		return nil, err
+	}
+	return decodePlistXML(output)
+}
+
+func run(binary string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	defer cancel()
+	return exec.CommandContext(ctx, binary, args...).Output()
 }
 
 // commandOutput runs a read-only status command and returns its combined
-// output, or nil if the command could not be executed. Combined output is used
-// so a status line printed on stderr is still observed.
+// output, or nil if the command could not be executed or failed. Combined
+// output is used so a status line printed on stderr is still observed.
 func commandOutput(binary string, args ...string) *string {
-	output, err := exec.Command(binary, args...).CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, binary, args...).CombinedOutput()
 	if err != nil {
 		return nil
 	}
@@ -66,14 +143,17 @@ func commandOutput(binary string, args ...string) *string {
 	return &text
 }
 
-// anyPathExists returns true at the first path that exists, and nil when none
-// do. A missing path is treated as unknown, not as a negative result.
-func anyPathExists(paths []string) *bool {
-	for _, path := range paths {
-		if _, err := os.Stat(path); err == nil {
-			value := true
-			return &value
-		}
+// commandOutputAnyExit is commandOutput for commands whose non-zero exit
+// carries meaning (for example `defaults read` of an unset key). It returns
+// nil only when the command could not start or timed out.
+func commandOutputAnyExit(binary string, args ...string) *string {
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, binary, args...).CombinedOutput()
+	var exitErr *exec.ExitError
+	if err != nil && (!errors.As(err, &exitErr) || ctx.Err() != nil) {
+		return nil
 	}
-	return nil
+	text := string(output)
+	return &text
 }

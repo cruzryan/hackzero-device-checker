@@ -24,7 +24,11 @@ import (
 	"github.com/hackzero/device-checker/internal/reporting"
 )
 
+// version is set at release build time with -ldflags "-X main.version=...".
 var version = "dev"
+
+// lockWait is how long a second run waits for the running one to finish.
+const lockWait = 20 * time.Second
 
 func main() {
 	if len(os.Args) < 2 {
@@ -36,9 +40,13 @@ func main() {
 	case "pair":
 		pairDevice(os.Args[2:])
 	case "report":
-		runAgent(true, os.Args[2:])
+		sendReport()
 	case "run":
-		runAgent(false, os.Args[2:])
+		runAgent(os.Args[2:])
+	case "last":
+		_, _ = os.Stdout.Write(append(lastOutput(stateDir()), '\n'))
+	case "diagnose":
+		printJSON(buildDiagnosis(stateDir(), probe.OSVersion()))
 	case "connection":
 		printConnection()
 	case "disconnect":
@@ -49,30 +57,25 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: device-checker <status|pair|report|run|connection|disconnect>")
+	fmt.Fprintln(os.Stderr, "usage: device-checker <status|report|run [--once]|last|diagnose|pair|connection|disconnect>")
 	os.Exit(2)
 }
 
-func printStatus() {
+func requireElevation() {
 	if runtime.GOOS == "windows" && !probe.Elevated() {
-		fmt.Fprintln(os.Stderr, "device-checker: administrator approval is required to collect Windows posture")
-		os.Exit(3)
+		failJSON("elevation_required", "administrator approval is required to collect Windows posture", 3)
 	}
+}
+
+// printStatus collects and prints the Report. It is never sent.
+func printStatus() {
+	requireElevation()
 	observation, err := probe.Collect()
 	if err != nil {
 		// A collection error is not evidence of failure.
 		observation = posture.Observation{}
 	}
-	// Architecture is intentionally not collected: it is not needed to prove a
-	// posture setting.  `runtime.GOOS` is the honest platform value until each
-	// platform probe supplies an OS release from an authoritative API.
-	report := posture.Evaluate(observation, runtime.GOOS, runtime.GOOS, version, time.Now())
-	encoder := json.NewEncoder(os.Stdout)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(report); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
+	printJSON(posture.Evaluate(observation, runtime.GOOS, "", version, time.Now()))
 }
 
 type savedState struct {
@@ -82,12 +85,25 @@ type savedState struct {
 	PersonName    string          `json:"person_name"`
 }
 
-func statePath() string {
+// stateDir holds the identity, pairing, scheduler state, queue, last report
+// and lock file. Everything in it is owner-only.
+func stateDir() string {
 	base, err := os.UserConfigDir()
 	if err != nil {
 		base = os.TempDir()
 	}
-	return filepath.Join(base, "HackZero", "DeviceChecker", "identity.json")
+	return filepath.Join(base, "HackZero", "DeviceChecker")
+}
+
+func statePath() string                { return identityPath(stateDir()) }
+func identityPath(dir string) string   { return filepath.Join(dir, "identity.json") }
+func pairingPath(dir string) string    { return identityPath(dir) + ".pairing" }
+func agentStatePath(dir string) string { return filepath.Join(dir, "agent-state.json") }
+func spoolPath(dir string) string      { return filepath.Join(dir, "queue") }
+func lastReportPath(dir string) string { return filepath.Join(dir, "last-report.json") }
+func lockPath(dir string) string       { return filepath.Join(dir, "device-checker.lock") }
+func spoolFor(dir string) reporting.Spool {
+	return reporting.Spool{Directory: spoolPath(dir), MaxItems: 96}
 }
 
 func loadOrCreateIdentity() (identity.Device, error) {
@@ -105,12 +121,14 @@ func loadOrCreateIdentity() (identity.Device, error) {
 	return created, nil
 }
 
-func loadState() (savedState, error) {
-	device, err := identity.Load(statePath())
+func loadState() (savedState, error) { return loadStateFrom(stateDir()) }
+
+func loadStateFrom(dir string) (savedState, error) {
+	device, err := identity.Load(identityPath(dir))
 	if err != nil {
 		return savedState{}, fmt.Errorf("load device identity: %w", err)
 	}
-	data, err := os.ReadFile(statePath() + ".pairing")
+	data, err := os.ReadFile(pairingPath(dir))
 	if err != nil {
 		return savedState{}, errors.New("this device is not connected to HackZero")
 	}
@@ -276,68 +294,199 @@ func removeLocalPairing() {
 	_ = os.Remove(statePath())
 }
 
-func sendReport(args []string) {
-	runAgent(true, args)
-}
-
+// reportSender posts a signed envelope and captures the service's verdict.
 type reportSender struct{ url string }
 
-func (s reportSender) Send(ctx context.Context, envelope reporting.Envelope) error {
-	return postJSONContext(ctx, s.url, envelope, &map[string]any{})
+func (s reportSender) Send(ctx context.Context, envelope reporting.Envelope) (agent.SendResult, error) {
+	var response struct {
+		Device *agent.ServerDevice `json:"device"`
+	}
+	status, err := postJSONStatus(ctx, s.url, envelope, &response)
+	var he *httpError
+	switch {
+	case errors.As(err, &he):
+		return agent.SendResult{HTTPStatus: he.status, ErrorCode: serverErrorCode(he.body)}, err
+	case status == 0:
+		return agent.SendResult{}, err
+	default:
+		// A 2xx whose body could not be decoded was still accepted.
+		return agent.SendResult{HTTPStatus: status, Device: response.Device}, nil
+	}
 }
 
-func agentStatePath() string { return filepath.Join(filepath.Dir(statePath()), "agent-state.json") }
-func spoolPath() string      { return filepath.Join(filepath.Dir(statePath()), "queue") }
+// serverErrorCode extracts the service's short {"error": "..."} code.
+func serverErrorCode(body string) string {
+	var parsed struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal([]byte(body), &parsed) != nil {
+		return ""
+	}
+	return posture.SanitizeToken(parsed.Error)
+}
 
-func configuredRunner() (agent.Runner, error) {
-	state, err := loadState()
+func configuredRunner(dir string) (agent.Runner, error) {
+	state, err := loadStateFrom(dir)
 	if err != nil {
 		return agent.Runner{}, err
 	}
 	return agent.Runner{
-		Device:    state.Identity,
-		Collector: probe.Collect,
-		Sender:    reportSender{url: state.ReportURL},
-		Spool:     reporting.Spool{Directory: spoolPath(), MaxItems: 96},
-		StatePath: agentStatePath(),
-		Version:   version,
+		Device:         state.Identity,
+		Collector:      probe.Collect,
+		Sender:         reportSender{url: state.ReportURL},
+		Spool:          spoolFor(dir),
+		StatePath:      agentStatePath(dir),
+		LastReportPath: lastReportPath(dir),
+		Version:        version,
 	}, nil
 }
 
-// run starts the durable background loop. Service managers start this command
-// at boot; `run --once` is useful to test the installed runtime without a
-// resident process. `report` remains a convenient one-shot Check now alias.
-func runAgent(forceFull bool, args []string) {
-	if runtime.GOOS == "windows" && !probe.Elevated() {
-		fatal(errors.New("administrator approval is required to collect Windows posture"))
+// sendReport collects, signs and sends ONE full report ("Check now"), prints
+// its RunResult, and persists it as last-report.json.
+func sendReport() {
+	requireElevation()
+	dir := stateDir()
+	runner, err := configuredRunner(dir)
+	if err != nil {
+		failJSON("not_connected", err.Error(), 1)
 	}
+	runner.Source = agent.SourceManual
+	release, err := agent.AcquireLock(lockPath(dir), lockWait)
+	if err != nil {
+		failLock(err)
+	}
+	outcome, err := runner.Run(context.Background(), true)
+	release()
+	if err != nil {
+		failJSON("report_failed", err.Error(), 1)
+	}
+	if outcome.Full == nil {
+		failJSON("report_failed", "no full report was produced", 1)
+	}
+	printJSON(outcome.Full)
+}
+
+// runAgent starts the durable background loop. Service managers start this
+// command at boot; `run --once` performs one scheduling tick and exits. Each
+// tick holds the lock so it never overlaps a manual `report`.
+func runAgent(args []string) {
+	requireElevation()
 	flags := flag.NewFlagSet("run", flag.ExitOnError)
 	once := flags.Bool("once", false, "run one scheduling tick and exit")
 	_ = flags.Parse(args)
-	runner, err := configuredRunner()
+	dir := stateDir()
+	runner, err := configuredRunner(dir)
 	if err != nil {
 		fatal(err)
 	}
+	runner.Source = agent.SourceBackground
 	for {
-		due, err := runner.Tick(context.Background(), forceFull)
+		release, err := agent.AcquireLock(lockPath(dir), lockWait)
+		if err != nil {
+			if *once || !errors.Is(err, agent.ErrBusy) {
+				failLock(err)
+			}
+			time.Sleep(time.Minute)
+			continue
+		}
+		outcome, err := runner.Run(context.Background(), false)
+		release()
 		if err != nil {
 			fatal(err)
 		}
-		pending, pendingErr := runner.Spool.Pending()
-		if pendingErr != nil {
-			fatal(pendingErr)
-		}
-		delivery := "uploaded"
-		if len(pending) > 0 {
-			delivery = "queued"
-		}
-		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"full_report_due": due.FullReport, "heartbeat_due": due.Heartbeat, "delivery": delivery})
-		if *once || forceFull {
+		printJSON(tickSummary(outcome, runner.Spool.Count()))
+		if *once {
 			return
 		}
-		forceFull = false
 		time.Sleep(time.Minute)
 	}
+}
+
+// tickSummary is the `run` output line.
+func tickSummary(outcome agent.Outcome, queued int) map[string]any {
+	delivery := agent.DeliveryUploaded
+	switch {
+	case outcome.Full != nil:
+		delivery = outcome.Full.Delivery
+	case outcome.HeartbeatDelivery != "":
+		delivery = outcome.HeartbeatDelivery
+	case queued > 0:
+		delivery = agent.DeliveryQueued
+	}
+	return map[string]any{"full_report_due": outcome.Due.FullReport, "heartbeat_due": outcome.Due.Heartbeat, "delivery": delivery}
+}
+
+// lastOutput is last-report.json verbatim, or {"available": false}.
+func lastOutput(dir string) []byte {
+	data, err := os.ReadFile(lastReportPath(dir))
+	if err != nil || !json.Valid(data) {
+		return []byte(`{"available":false}`)
+	}
+	var compact bytes.Buffer
+	if json.Compact(&compact, data) != nil {
+		return []byte(`{"available":false}`)
+	}
+	return compact.Bytes()
+}
+
+// diagnosis is support information. It never contains the private key or the
+// identity file: only the public device id.
+type diagnosis struct {
+	CheckerVersion string          `json:"checker_version"`
+	OSVersion      string          `json:"os_version"`
+	Platform       string          `json:"platform"`
+	Paired         bool            `json:"paired"`
+	WorkspaceName  string          `json:"workspace_name"`
+	PersonName     string          `json:"person_name"`
+	DeviceID       string          `json:"device_id"`
+	AgentState     *agent.State    `json:"agent_state"`
+	QueueCount     int             `json:"queue_count"`
+	Last           json.RawMessage `json:"last"`
+}
+
+func buildDiagnosis(dir, osVersion string) diagnosis {
+	d := diagnosis{
+		CheckerVersion: posture.SanitizeToken(version),
+		OSVersion:      posture.SanitizeToken(osVersion),
+		Platform:       runtime.GOOS,
+		QueueCount:     spoolFor(dir).Count(),
+	}
+	if state, err := loadStateFrom(dir); err == nil {
+		d.Paired, d.WorkspaceName, d.PersonName, d.DeviceID = true, state.WorkspaceName, state.PersonName, state.Identity.ID
+	} else if device, err := identity.Load(identityPath(dir)); err == nil {
+		d.DeviceID = device.ID
+	}
+	if _, err := os.Stat(agentStatePath(dir)); err == nil {
+		state := agent.LoadState(agentStatePath(dir))
+		d.AgentState = &state
+	}
+	if last := lastOutput(dir); !bytes.Equal(last, []byte(`{"available":false}`)) {
+		d.Last = last
+	}
+	return d
+}
+
+func printJSON(value any) {
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(value); err != nil {
+		fatal(err)
+	}
+}
+
+// failJSON prints a machine-readable error on stdout (the desktop app reads
+// stdout) and a readable line on stderr, then exits.
+func failJSON(code, message string, exitCode int) {
+	_ = json.NewEncoder(os.Stdout).Encode(map[string]string{"error": code, "message": message})
+	fmt.Fprintln(os.Stderr, "device-checker:", message)
+	os.Exit(exitCode)
+}
+
+func failLock(err error) {
+	if errors.Is(err, agent.ErrBusy) {
+		failJSON("busy", "Another Device Checker check is already running. Try again in a moment.", 4)
+	}
+	failJSON("lock_failed", err.Error(), 1)
 }
 
 // httpError carries a non-2xx server response so callers can branch on the
@@ -353,35 +502,38 @@ func (e *httpError) Error() string {
 }
 
 func postJSON(url string, input, output any) error {
-	return postJSONContext(context.Background(), url, input, output)
+	_, err := postJSONStatus(context.Background(), url, input, output)
+	return err
 }
 
-func postJSONContext(ctx context.Context, url string, input, output any) error {
+// postJSONStatus returns the HTTP status (0 when no response arrived). A 2xx
+// whose body does not decode returns the status and the decode error.
+func postJSONStatus(ctx context.Context, url string, input, output any) (int, error) {
 	body, err := json.Marshal(input)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	request.Header.Set("Content-Type", "application/json")
 	client := &http.Client{Timeout: 20 * time.Second}
 	response, err := client.Do(request)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer response.Body.Close()
 	limited := io.LimitReader(response.Body, 64*1024)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		data, _ := io.ReadAll(limited)
-		return &httpError{status: response.StatusCode, body: string(data)}
+		return response.StatusCode, &httpError{status: response.StatusCode, body: string(data)}
 	}
 	err = json.NewDecoder(limited).Decode(output)
 	if errors.Is(err, io.EOF) {
-		return nil
+		return response.StatusCode, nil
 	}
-	return err
+	return response.StatusCode, err
 }
 
 func trimServer(server string) string {

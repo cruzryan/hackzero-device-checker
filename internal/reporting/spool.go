@@ -73,8 +73,12 @@ func (s Spool) Queue(envelope Envelope) (string, error) {
 	return path, nil
 }
 
-// Pending returns oldest queued reports first. Corrupt files are rejected,
-// rather than silently dropped; a support workflow can preserve evidence.
+// CorruptSuffix is appended to a queue file that cannot be read or verified.
+const CorruptSuffix = ".corrupt"
+
+// Pending returns oldest queued reports first. A corrupt or unverifiable file
+// is moved aside (renamed with CorruptSuffix) rather than deleted, so support
+// can still inspect it, and it never blocks delivery of the rest.
 func (s Spool) Pending() ([]Queued, error) {
 	entries, err := os.ReadDir(s.Directory)
 	if errors.Is(err, os.ErrNotExist) {
@@ -91,15 +95,16 @@ func (s Spool) Pending() ([]Queued, error) {
 		path := filepath.Join(s.Directory, entry.Name())
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return nil, err
+			continue
 		}
 		var envelope Envelope
 		if err := json.Unmarshal(data, &envelope); err != nil || !envelope.Verify() {
-			return nil, fmt.Errorf("invalid queued report %q", entry.Name())
+			_ = os.Rename(path, path+CorruptSuffix)
+			continue
 		}
 		info, err := entry.Info()
 		if err != nil {
-			return nil, err
+			continue
 		}
 		queued = append(queued, Queued{Path: path, Envelope: envelope, queuedAt: info.ModTime()})
 	}
@@ -117,6 +122,21 @@ func (s Spool) Pending() ([]Queued, error) {
 		return queued[i].queuedAt.Before(queued[j].queuedAt)
 	})
 	return queued, nil
+}
+
+// Count returns how many reports are queued without reading or changing them.
+func (s Spool) Count() int {
+	entries, err := os.ReadDir(s.Directory)
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
+			count++
+		}
+	}
+	return count
 }
 
 // Queued is a verified report awaiting delivery.

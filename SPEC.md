@@ -45,6 +45,151 @@ The checker records both of these facts:
 1. **Automatic updates enabled**. This is the AC-12 requirement. If disabled, AC-12 fails.
 2. **Important update pending**. This is an amber maintenance action, not an AC-12 failure by itself. A laptop can have automatic updates enabled while it waits for a safe install/restart window.
 
+## Collector report v2
+
+`schema_version` stays `1`; every v2 addition is optional, so older servers and
+readers keep working. The report keeps its field order:
+`schema_version, collected_at, platform, os_version, checker_version,
+disk_encryption, screen_lock, automatic_updates, pending_maintenance,
+endpoint_protection`.
+
+- `os_version` is the real OS version: macOS `sw_vers -productVersion`
+  (`26.5.2`), Windows `Major.Minor.Build` (`10.0.26200`), Linux `VERSION_ID`
+  (`24.04`). `unknown` when it cannot be read.
+- `checker_version` is the release version set at build time; `dev` for local
+  builds.
+
+Each signal is:
+
+```json
+{ "status": "pass|fail|needs_attention|unknown",
+  "code": "primary reason, omitted on pass",
+  "detail": { "raw facts, omitted when nothing was read" },
+  "warnings": ["warning codes, omitted when empty; never change status"] }
+```
+
+### Signature safety
+
+The service verifies the Ed25519 signature over Python
+`json.dumps(unsigned, separators=(",", ":"), ensure_ascii=True)` of the parsed
+envelope; the collector signs Go `json.Marshal`. Those bytes agree only when
+every value is an integer, a boolean, null, or an ASCII string without `<`,
+`>` or `&`. Detail values are therefore only integers, booleans and fixed
+lowercase enum strings: never floats, command output, or product names.
+`os_version` and `checker_version` are reduced to `[A-Za-z0-9._-]`. A test
+marshals a fully populated report and fails on any other byte, and the server
+repository verifies envelopes signed by this code
+(`apps/trust/tests/test_device_checker_signature_v2.py`).
+
+### Rules and detail per signal
+
+**Screen lock** (`screen_lock`). For every power profile the computer has, the
+time until a password is required must be 15 minutes or less (exactly 15
+passes). Time until password = the sooner of display-off and screen saver
+(whichever is set and not "never") + the password delay. A delay of 5 seconds
+or less counts as immediate (macOS defaults to 5 s). "Never" fails, and no
+password on wake fails. A definite failure beats an unknown.
+
+```json
+{ "limit_minutes": 15,
+  "password": "immediate|delay|off|unknown",
+  "password_delay_seconds": 300,
+  "screensaver_minutes": 20,
+  "active_power": "ac|battery|ups|",
+  "profiles": [ { "power": "battery|ac|ups|any", "display_off_minutes": 2,
+                  "lock_minutes": 7, "ok": true } ] }
+```
+
+`password_delay_seconds` is present when the password is immediate or delayed;
+`screensaver_minutes` only when a screen saver timer is set (0 = never);
+`display_off_minutes` only when the profile has a display timer;
+`lock_minutes` only when it is known (0 = never). Codes:
+`screen_lock_password_off`, `screen_lock_never`,
+`screen_lock_timeout_too_long`, `signal_unavailable`. Legacy codes
+`screen_lock_disabled` and `screen_lock_password_not_required` remain valid.
+
+| Platform | Sources |
+| --- | --- |
+| macOS | `pmset -g custom` (Battery / AC / UPS `displaysleep`; a Mac mini has only AC), `pmset -g batt` (active source), `sysadminctl -screenLock status` (password delay), `defaults -currentHost read com.apple.screensaver idleTime`, and an MDM profile in `/Library/Managed Preferences` which wins. Read only in the logged-in user's console session; otherwise unknown. |
+| Windows | Any one of: machine `InactivityTimeoutSecs` (1-900 s); a secure screen saver (policy key overrides the user key) at 1-900 s; or display-off on AC and on battery (`powercfg /qh ... VIDEOIDLE`) with sign-in on wake (`CONSOLELOCK`) plus `DelayLockInterval`. `DelayLockInterval` = 0xFFFFFFFF means sign-in is never required. Profiles are `ac`/`battery` for the display path and `any` for the inactivity / screen-saver paths. A missing key is unknown, never false. |
+| Linux (GNOME) | `org.gnome.desktop.session idle-delay`, `org.gnome.desktop.screensaver lock-enabled` and `lock-delay`, read only with the user's session bus. One `any` profile. |
+
+**Disk encryption** (`disk_encryption`): `{ "state": "on|off|encrypting|decrypting|pending_restart|suspended", "percent": 42 }`
+(`percent` while encrypting/decrypting). `encrypting` passes. Codes:
+`disk_encryption_disabled` (off, pending_restart), `disk_encryption_decrypting`,
+`disk_encryption_suspended` (Windows: encrypted with protection off, or
+encryption paused). macOS reads `fdesetup status` only (diskutil's
+"Encrypted:" says No on a FileVault Mac). Windows reads
+`Get-BitLockerVolume`. Linux checks for a `crypt` ancestor of the root
+filesystem (`findmnt`, `lsblk -s`).
+
+**Automatic updates** (`automatic_updates`). macOS detail
+`{ "check", "download", "security_responses", "system_data", "os_install" }`
+from `/Library/Preferences/com.apple.SoftwareUpdate.plist` (a missing key is
+the OS default, on; a managed profile wins). Required: check, download and
+security responses. System data belongs to endpoint protection; installing
+macOS upgrades automatically is not required. Windows detail
+`{ "check", "download", "paused", "policy_disabled" }` from Windows Update
+policy (`NoAutoUpdate`, `AUOptions`), the AutoUpdate COM notification level,
+`PauseUpdatesExpiryTime`, and the `wuauserv` start type. Linux detail
+`{ "check", "download" }` from `apt-config dump APT::Periodic`. Codes:
+`automatic_updates_disabled`, `automatic_updates_paused`.
+
+**Pending updates** (`pending_maintenance`) is a warning, never a failure:
+`needs_attention` with code `updates_pending` and
+`{ "count": 2, "waiting_days": 8 }`. On macOS, `count` is the
+`RecommendedUpdates` that are not major OS upgrades (Safari and other app
+updates count) and `waiting_days` is the age of the oldest counted offer in
+`FirstOfferDateDictionary`. Unknown on Windows and Linux.
+
+**Endpoint protection** (`endpoint_protection`). macOS detail
+`{ "gatekeeper", "system_data_updates", "definitions_version", "definitions_age_days" }`
+from `spctl --status`, `ConfigDataInstall`, and `xprotect version`. Codes
+`gatekeeper_disabled`, `definitions_updates_off`; warning `definitions_stale`
+when XProtect was last installed more than 30 days ago. Windows detail
+`{ "defender_realtime", "defender_mode": "normal|passive|edr_block|off|unknown", "other_antivirus", "definitions_age_days" }`
+from `Get-MpComputerStatus` and `root/SecurityCenter2 AntiVirusProduct`
+(`other_antivirus` counts enabled, up-to-date products that are not
+Defender). Passes when Defender real-time protection runs in normal mode or
+another antivirus is healthy; code `endpoint_protection_unavailable`; warning
+`definitions_stale` over 7 days. Linux keeps the ClamAV daemon check.
+
+## Collector command line
+
+The desktop app talks to the collector only through these commands. All
+print JSON on stdout.
+
+| Command | Behavior |
+| --- | --- |
+| `status` | Collect and print the report. Never sent. |
+| `report` | Collect, sign and send one full report; print a RunResult and save it as `last-report.json`. |
+| `run [--once]` | Scheduler tick (loop without `--once`). Prints `{"full_report_due","heartbeat_due","delivery"}`; a full report it sends is saved as `last-report.json`. |
+| `last` | Print `last-report.json`, or `{"available": false}`. |
+| `diagnose` | `{checker_version, os_version, platform, paired, workspace_name, person_name, device_id, agent_state, queue_count, last}`. Never the private key or the identity file. |
+| `pair`, `connection`, `disconnect` | Unchanged. |
+
+RunResult (`last-report.json`, owner-only, written atomically):
+
+```json
+{ "source": "manual|background",
+  "checked_at": "RFC 3339",
+  "report": { "the exact signed report" },
+  "delivery": "uploaded|queued|rejected|not_sent",
+  "http_status": 200,
+  "error": "short ASCII explanation when not uploaded",
+  "server": { "status": "pass|fail", "problems": [], "warnings": [] } }
+```
+
+Delivery rules: a 2xx response is `uploaded` and the service's `device`
+verdict is stored as `server`. No response, 5xx or 429 is `queued` and
+retried in order. Any other 4xx is `rejected`: it is not queued and never
+retried (401/404/410 mean the computer is no longer connected). When a queued
+report is later delivered, `last-report.json` is updated. A corrupt queue file
+is renamed `*.corrupt` and never blocks delivery. A lock file in the state
+directory (`device-checker.lock`) lets only one collector run at a time; it is
+stale after 2 minutes, and a second run waits up to 20 seconds, then prints
+`{"error":"busy",...}` and exits 4.
+
 ## Who and what is in scope
 
 The People roster is the source of truth. A person needs device evidence only if they are:

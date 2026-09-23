@@ -33,6 +33,17 @@ jobs:
           go-version: stable
           check-latest: true
       - run: go test ./...
+  desktop-js:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: desktop/package-lock.json }
+      - name: Desktop copy tests
+        working-directory: desktop
+        run: |
+          npm ci
+          npm test
   race:
     runs-on: ubuntu-latest
     steps:

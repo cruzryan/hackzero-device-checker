@@ -46,6 +46,20 @@ func New() (Device, error) {
 	}, nil
 }
 
+// FromSeed derives an identity from a fixed 32-byte Ed25519 seed. It exists
+// for deterministic test fixtures only; real devices always use New.
+func FromSeed(id string, seed []byte) (Device, error) {
+	if len(seed) != ed25519.SeedSize {
+		return Device{}, errors.New("seed must be 32 bytes")
+	}
+	privateKey := ed25519.NewKeyFromSeed(seed)
+	return Device{
+		ID:         id,
+		PublicKey:  base64.RawURLEncoding.EncodeToString(privateKey.Public().(ed25519.PublicKey)),
+		privateKey: base64.RawURLEncoding.EncodeToString(privateKey),
+	}, nil
+}
+
 // Sign produces a detached Ed25519 signature over the exact bytes supplied.
 func (d Device) Sign(message []byte) (string, error) {
 	key, err := base64.RawURLEncoding.DecodeString(d.privateKey)

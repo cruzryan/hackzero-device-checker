@@ -8,9 +8,12 @@ if (!releaseRoot || !tag || !repository || !tag.startsWith("desktop-v")) {
   throw new Error("This script must run from a desktop-v* GitHub release workflow.");
 }
 
+// The macOS app is universal: Apple silicon and Intel Macs update from the
+// same signed .app.tar.gz, so both updater targets point at it.
 const assets = {
   "windows-x86_64": ["desktop-windows", "HackZero-Device-Checker-windows-amd64.msi"],
-  "darwin-aarch64": ["desktop-macos", "HackZero-Device-Checker-macos-arm64.app.tar.gz"],
+  "darwin-aarch64": ["desktop-macos", "HackZero-Device-Checker-macos-universal.app.tar.gz"],
+  "darwin-x86_64": ["desktop-macos", "HackZero-Device-Checker-macos-universal.app.tar.gz"],
   "linux-x86_64": ["desktop-debian", "hackzero-device-checker-linux-amd64.AppImage"],
 };
 const platforms = {};

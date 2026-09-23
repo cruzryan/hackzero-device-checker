@@ -4,24 +4,110 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/hackzero/device-checker/internal/posture"
 )
 
 // This file has no build constraint on purpose: the parsing of macOS status
 // output is pure string logic, so it compiles and is unit-tested on every
 // platform (including CI runners without macOS). The darwin-only file wires
-// these helpers to the real commands.
+// these helpers to the real commands. Every helper returns nil / unknown when
+// its input is missing or unrecognized; none of them guesses a pass.
 
-// parseFileVault interprets `fdesetup status`. FileVault is the authoritative
-// disk-encryption source on macOS.
-func parseFileVault(output *string) *bool {
-	return matchOnOff(output, "filevault is on", "filevault is off")
+// macInputs is everything the macOS probe reads, as raw command output (nil =
+// the command could not run) or decoded plists (nil = absent/unreadable).
+type macInputs struct {
+	ProductVersion *string // sw_vers -productVersion
+	FileVault      *string // fdesetup status
+
+	ConsoleSession     bool    // the collector runs as the logged-in GUI user
+	PmsetCustom        *string // pmset -g custom
+	PmsetBatt          *string // pmset -g batt
+	Sysadminctl        *string // sysadminctl -screenLock status
+	ScreensaverIdle    *string // defaults -currentHost read com.apple.screensaver idleTime (output even on exit 1)
+	ManagedScreensaver map[string]any
+
+	SoftwareUpdate        map[string]any // /Library/Preferences/com.apple.SoftwareUpdate.plist
+	ManagedSoftwareUpdate map[string]any // /Library/Managed Preferences/com.apple.SoftwareUpdate.plist
+	Schedule              *string        // softwareupdate --schedule
+
+	Spctl           *string // spctl --status
+	XProtect        *string // xprotect version
+	XProtectVersion *string // CFBundleShortVersionString fallback
+}
+
+// macObservation assembles the posture facts from the raw macOS inputs.
+func macObservation(in macInputs, now time.Time) posture.Observation {
+	ob := posture.Observation{Disk: parseFileVaultState(in.FileVault)}
+	if in.ProductVersion != nil {
+		ob.OSVersion = posture.SanitizeToken(strings.TrimSpace(*in.ProductVersion))
+	}
+	if in.ConsoleSession {
+		ob.ScreenLock = macScreenLock(in)
+	}
+	updates := macUpdateFacts(in.SoftwareUpdate, in.ManagedSoftwareUpdate, parseAutomaticUpdates(in.Schedule))
+	if updates != nil {
+		ob.Updates = updates
+	}
+	if in.SoftwareUpdate != nil {
+		ob.Pending = macPendingUpdates(in.SoftwareUpdate, ob.OSVersion, now)
+	}
+	endpoint := &posture.EndpointFacts{Gatekeeper: parseGatekeeper(in.Spctl)}
+	if updates != nil {
+		endpoint.SystemDataUpdates = updates.SystemData
+	}
+	endpoint.DefinitionsVersion, endpoint.DefinitionsAgeDays = parseXProtect(in.XProtect, now)
+	if endpoint.DefinitionsVersion == nil {
+		endpoint.DefinitionsVersion = parseIntOutput(in.XProtectVersion)
+	}
+	ob.Endpoint = endpoint
+	return ob
+}
+
+// parseFileVaultState interprets `fdesetup status`. FileVault is the
+// authoritative disk-encryption source on macOS; diskutil's "Encrypted:" line
+// says No on a FileVault Mac and is never used.
+func parseFileVaultState(output *string) *posture.DiskFacts {
+	if output == nil {
+		return nil
+	}
+	text := strings.ToLower(*output)
+	percent := parsePercent(text)
+	switch {
+	case strings.Contains(text, "decryption in progress"):
+		return &posture.DiskFacts{State: posture.DiskDecrypting, Percent: percent}
+	case strings.Contains(text, "encryption in progress"):
+		return &posture.DiskFacts{State: posture.DiskEncrypting, Percent: percent}
+	case strings.Contains(text, "will be enabled after the next restart"), strings.Contains(text, "deferred enablement appears to be active"):
+		return &posture.DiskFacts{State: posture.DiskPendingRestart}
+	case strings.Contains(text, "filevault is on"):
+		return &posture.DiskFacts{State: posture.DiskOn}
+	case strings.Contains(text, "filevault is off"):
+		return &posture.DiskFacts{State: posture.DiskOff}
+	default:
+		return nil
+	}
+}
+
+var percentPattern = regexp.MustCompile(`percent completed\s*=\s*(\d+)`)
+
+func parsePercent(lowered string) *int {
+	match := percentPattern.FindStringSubmatch(lowered)
+	if match == nil {
+		return nil
+	}
+	value, err := strconv.Atoi(match[1])
+	if err != nil || value < 0 || value > 100 {
+		return nil
+	}
+	return &value
 }
 
 // parseAutomaticUpdates interprets `softwareupdate --schedule`. Current macOS
 // prints "Automatic checking for updates is turned on" (or "...off"); the
 // trailing on/off clause is the stable part to match. Older wording that this
-// does not recognize returns unknown rather than a false "off" - degrading to
-// unknown is safe, reporting a wrong "off" is the bug this replaces.
+// does not recognize returns unknown rather than a false "off".
 func parseAutomaticUpdates(output *string) *bool {
 	return matchOnOff(output, "is turned on", "is turned off")
 }
@@ -33,8 +119,7 @@ func parseGatekeeper(output *string) *bool {
 
 // matchOnOff returns true when the (case-insensitive) output contains onMarker,
 // false when it contains offMarker, and nil (unknown) when the command did not
-// run or the wording matches neither. It never guesses a result from silence,
-// and never turns an unrecognized string into a passing or failing verdict.
+// run or the wording matches neither.
 func matchOnOff(output *string, onMarker, offMarker string) *bool {
 	if output == nil {
 		return nil
@@ -52,52 +137,113 @@ func matchOnOff(output *string, onMarker, offMarker string) *bool {
 	}
 }
 
-// parseScreenLock interprets `sysadminctl -screenLock status`, which prints
-// (to stderr, with a timestamp prefix) either "screenLock delay is N seconds"
-// when a password is required on wake, or "screenLock is off" when it is not.
-// It returns whether the lock is enabled and whether it is secure (a password
-// is required); both are nil (unknown) when no GUI user is present or the
-// wording is unrecognized, so we never report a false pass.
-func parseScreenLock(output *string) (enabled *bool, secure *bool) {
+var screenLockDelayPattern = regexp.MustCompile(`screenlock delay is (\d+) seconds?`)
+
+// parseSysadminctlScreenLock interprets `sysadminctl -screenLock status`, which
+// prints to stderr with a timestamp prefix: "screenLock delay is 300 seconds",
+// "screenLock delay is immediate", or "screenLock is off". It returns the
+// password state and the delay in seconds.
+func parseSysadminctlScreenLock(output *string) (string, *int) {
 	if output == nil {
-		return nil, nil
+		return posture.PasswordUnknown, nil
 	}
 	text := strings.ToLower(*output)
 	switch {
 	case strings.Contains(text, "screenlock is off"):
-		off := false
-		return &off, &off
-	case strings.Contains(text, "delay is"):
-		on := true
-		return &on, &on
-	default:
-		return nil, nil
+		return posture.PasswordOff, nil
+	case strings.Contains(text, "screenlock delay is immediate"):
+		zero := 0
+		return posture.PasswordImmediate, &zero
 	}
+	if match := screenLockDelayPattern.FindStringSubmatch(text); match != nil {
+		if seconds, err := strconv.Atoi(match[1]); err == nil {
+			if seconds == 0 {
+				return posture.PasswordImmediate, &seconds
+			}
+			return posture.PasswordDelay, &seconds
+		}
+	}
+	return posture.PasswordUnknown, nil
 }
 
-var displaySleepPattern = regexp.MustCompile(`(?i)displaysleep\s+(\d+)`)
+var (
+	pmsetSectionPattern = regexp.MustCompile(`^(Battery|AC|UPS) Power:\s*$`)
+	displaySleepPattern = regexp.MustCompile(`^displaysleep\s+(\d+)`)
+)
 
-// parsePmsetDisplaySleep pulls the active display-sleep timeout in minutes from
-// `pmset -g`. This is when the screen goes dark and, with a password required,
-// the machine locks. Returns nil when the value is not present.
-func parsePmsetDisplaySleep(output *string) *int {
+// parsePmsetCustom reads `pmset -g custom`: one section per power source the
+// machine has ("Battery Power:", "AC Power:", and possibly "UPS Power:"; a Mac
+// mini has only AC), each with " displaysleep N" in minutes (0 = never).
+func parsePmsetCustom(output *string) []posture.ProfileFacts {
 	if output == nil {
 		return nil
 	}
-	match := displaySleepPattern.FindStringSubmatch(*output)
-	if match == nil {
-		return nil
+	var profiles []posture.ProfileFacts
+	current := -1
+	for _, line := range strings.Split(*output, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if match := pmsetSectionPattern.FindStringSubmatch(trimmed); match != nil {
+			profiles = append(profiles, posture.ProfileFacts{Power: powerName(match[1])})
+			current = len(profiles) - 1
+			continue
+		}
+		if current < 0 {
+			continue
+		}
+		if match := displaySleepPattern.FindStringSubmatch(trimmed); match != nil {
+			if minutes, err := strconv.Atoi(match[1]); err == nil {
+				seconds := minutes * 60
+				profiles[current].DisplayOffSeconds = &seconds
+			}
+		}
 	}
-	value, err := strconv.Atoi(match[1])
-	if err != nil {
-		return nil
-	}
-	return &value
+	return profiles
 }
 
-// parseIntOutput parses a command whose entire output is a single integer, such
-// as `defaults -currentHost read com.apple.screensaver idleTime`. Returns nil
-// when the command did not run or the output is not an integer.
+func powerName(source string) string {
+	switch strings.ToLower(source) {
+	case "battery":
+		return posture.PowerBattery
+	case "ac":
+		return posture.PowerAC
+	case "ups":
+		return posture.PowerUPS
+	}
+	return ""
+}
+
+var drawingFromPattern = regexp.MustCompile(`Now drawing from '(Battery|AC|UPS) Power'`)
+
+// parseActivePower reads the first line of `pmset -g batt`.
+func parseActivePower(output *string) string {
+	if output == nil {
+		return ""
+	}
+	if match := drawingFromPattern.FindStringSubmatch(*output); match != nil {
+		return powerName(match[1])
+	}
+	return ""
+}
+
+// parseScreensaverIdle reads `defaults -currentHost read com.apple.screensaver
+// idleTime`. "does not exist" means the screen saver timer is not set (known,
+// excluded from the lock time); an integer is seconds (0 = never); anything
+// else is unreadable.
+func parseScreensaverIdle(output *string) (seconds *int, known bool) {
+	if output == nil {
+		return nil, false
+	}
+	if strings.Contains(strings.ToLower(*output), "does not exist") {
+		return nil, true
+	}
+	value := parseIntOutput(output)
+	if value == nil || *value < 0 {
+		return nil, false
+	}
+	return value, true
+}
+
+// parseIntOutput parses a command whose entire output is a single integer.
 func parseIntOutput(output *string) *int {
 	if output == nil {
 		return nil
@@ -109,33 +255,164 @@ func parseIntOutput(output *string) *int {
 	return &value
 }
 
-// screenLockMinutes computes how many minutes an unattended screen stays awake
-// before it darkens (and then locks): the sooner of the display-sleep timeout
-// and the screensaver idle time. A source set to 0 means "never" and is
-// excluded. When both sources are readable but both are "never", it returns 0,
-// which the posture layer treats as a lock timeout that is too long. When
-// neither source is readable it returns nil (unknown).
-func screenLockMinutes(displaySleepMinutes *int, screensaverIdleSeconds *int) *int {
-	if displaySleepMinutes == nil && screensaverIdleSeconds == nil {
-		return nil
+// macScreenLock combines the per-profile display timers, the screen saver and
+// the password-on-wake setting. A configuration profile (MDM) at
+// /Library/Managed Preferences wins over the user's own settings.
+func macScreenLock(in macInputs) *posture.ScreenLockFacts {
+	password, delay := parseSysadminctlScreenLock(in.Sysadminctl)
+	saver, known := parseScreensaverIdle(in.ScreensaverIdle)
+	facts := &posture.ScreenLockFacts{
+		Password:             password,
+		PasswordDelaySeconds: delay,
+		ScreensaverSeconds:   saver,
+		ScreensaverKnown:     known,
+		ActivePower:          parseActivePower(in.PmsetBatt),
+		Profiles:             parsePmsetCustom(in.PmsetCustom),
 	}
-	var candidates []int
-	if displaySleepMinutes != nil && *displaySleepMinutes > 0 {
-		candidates = append(candidates, *displaySleepMinutes)
-	}
-	if screensaverIdleSeconds != nil && *screensaverIdleSeconds > 0 {
-		// Round up so a partial minute is never reported as a shorter, safer time.
-		candidates = append(candidates, (*screensaverIdleSeconds+59)/60)
-	}
-	if len(candidates) == 0 {
-		never := 0
-		return &never
-	}
-	soonest := candidates[0]
-	for _, c := range candidates[1:] {
-		if c < soonest {
-			soonest = c
+	if managed := in.ManagedScreensaver; managed != nil {
+		if idle, ok := plistInt(managed, "idleTime"); ok && idle >= 0 {
+			facts.ScreensaverSeconds, facts.ScreensaverKnown = &idle, true
+		}
+		ask, askKnown := plistBool(managed, "askForPassword")
+		managedDelay, delayKnown := plistInt(managed, "askForPasswordDelay")
+		switch {
+		case askKnown && !ask:
+			facts.Password, facts.PasswordDelaySeconds = posture.PasswordOff, nil
+		case delayKnown && managedDelay >= 0:
+			facts.PasswordDelaySeconds = &managedDelay
+			if managedDelay == 0 {
+				facts.Password = posture.PasswordImmediate
+			} else {
+				facts.Password = posture.PasswordDelay
+			}
 		}
 	}
-	return &soonest
+	return facts
+}
+
+// macUpdateFacts reads the Software Update preferences. A missing key is the
+// OS default, which is on. A managed (MDM) value wins over the local one.
+func macUpdateFacts(local, managed map[string]any, schedule *bool) *posture.UpdateFacts {
+	if local == nil && managed == nil {
+		if schedule == nil {
+			return nil
+		}
+		return &posture.UpdateFacts{Check: schedule}
+	}
+	read := func(key string) *bool {
+		value := true
+		if v, ok := plistBool(local, key); ok {
+			value = v
+		}
+		if v, ok := plistBool(managed, key); ok {
+			value = v
+		}
+		return &value
+	}
+	facts := &posture.UpdateFacts{
+		Check:             read("AutomaticCheckEnabled"),
+		Download:          read("AutomaticDownload"),
+		SecurityResponses: read("CriticalUpdateInstall"),
+		SystemData:        read("ConfigDataInstall"),
+		OSInstall:         read("AutomaticallyInstallMacOSUpdates"),
+	}
+	if schedule != nil && !*schedule {
+		off := false
+		facts.Check = &off
+	}
+	return facts
+}
+
+// macPendingUpdates counts RecommendedUpdates that are not major OS upgrades
+// (an identifier containing "_major", or an OS update whose display version's
+// major number is above the running macOS). Safari and other app updates
+// count. waiting_days is the age of the oldest counted offer when known.
+func macPendingUpdates(plist map[string]any, osVersion string, now time.Time) *posture.PendingFacts {
+	currentMajor := leadingInt(osVersion)
+	offers, _ := plist["FirstOfferDateDictionary"].(map[string]any)
+	items, _ := plist["RecommendedUpdates"].([]any)
+	count := 0
+	var oldest time.Time
+	for _, raw := range items {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		identifier := plistString(item, "Identifier")
+		productKey := plistString(item, "Product Key")
+		if strings.Contains(identifier, "_major") || strings.Contains(productKey, "_major") {
+			continue
+		}
+		mobile, _ := plistBool(item, "MobileSoftwareUpdate")
+		isOS := mobile || strings.HasPrefix(identifier, "MSU_UPDATE_")
+		if isOS && currentMajor > 0 && leadingInt(plistString(item, "Display Version")) > currentMajor {
+			continue
+		}
+		count++
+		for _, key := range []string{identifier, productKey} {
+			if key == "" {
+				continue
+			}
+			if text, ok := offers[key].(string); ok {
+				if offered, ok := parsePlistDate(text); ok && (oldest.IsZero() || offered.Before(oldest)) {
+					oldest = offered
+				}
+			}
+		}
+	}
+	facts := &posture.PendingFacts{Count: &count}
+	if count > 0 && !oldest.IsZero() {
+		days := int(now.Sub(oldest).Hours() / 24)
+		if days < 0 {
+			days = 0
+		}
+		facts.WaitingDays = &days
+	}
+	return facts
+}
+
+// leadingInt returns the first run of digits in a version string, or 0.
+func leadingInt(version string) int {
+	version = strings.TrimSpace(version)
+	end := 0
+	for end < len(version) && version[end] >= '0' && version[end] <= '9' {
+		end++
+	}
+	value, _ := strconv.Atoi(version[:end])
+	return value
+}
+
+var (
+	xprotectVersionPattern   = regexp.MustCompile(`Version:\s*(\d+)`)
+	xprotectInstalledPattern = regexp.MustCompile(`Installed:\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4})`)
+)
+
+// parseXProtect reads `xprotect version`, e.g.
+// "Version: 5360 Installed: 2026-09-18 21:53:58 +0000".
+func parseXProtect(output *string, now time.Time) (version *int, ageDays *int) {
+	if output == nil {
+		return nil, nil
+	}
+	if match := xprotectVersionPattern.FindStringSubmatch(*output); match != nil {
+		if v, err := strconv.Atoi(match[1]); err == nil {
+			version = &v
+		}
+	}
+	if match := xprotectInstalledPattern.FindStringSubmatch(*output); match != nil {
+		if installed, err := time.Parse("2006-01-02 15:04:05 -0700", match[1]); err == nil {
+			days := int(now.Sub(installed).Hours() / 24)
+			if days < 0 {
+				days = 0
+			}
+			ageDays = &days
+		}
+	}
+	return version, ageDays
+}
+
+// consoleSession reports whether the collector runs as the user who owns the
+// GUI console. Screen-lock settings are per user; outside the console session
+// (root, or the login window) they are unknown, never guessed.
+func consoleSession(consoleUID, uid uint32) bool {
+	return consoleUID != 0 && consoleUID == uid
 }

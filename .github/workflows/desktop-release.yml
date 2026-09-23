@@ -22,16 +22,17 @@ jobs:
         with: { go-version: stable }
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm, cache-dependency-path: desktop/package-lock.json }
-      - name: Test and prepare fixed collector resources
+      - name: Test and prepare the bundled collector
         shell: pwsh
         run: |
           go test ./...
+          # Reports carry the real release version, not "dev".
+          $version = $env:GITHUB_REF_NAME -replace '^desktop-v',''
           # The collector is launched by the native tray app with captured
           # output. A GUI subsystem prevents Windows from creating a console
           # window for every local check or pairing attempt.
-          $env:GOOS='windows'; $env:GOARCH='amd64'; go build -trimpath -buildvcs=true -ldflags="-H=windowsgui" -o bin/device-checker-windows-amd64.exe ./cmd/device-checker
-          $env:GOOS='darwin'; $env:GOARCH='arm64'; go build -trimpath -buildvcs=true -o bin/device-checker-macos-arm64 ./cmd/device-checker
-          $env:GOOS='linux'; $env:GOARCH='amd64'; go build -trimpath -buildvcs=true -o bin/device-checker-linux-amd64 ./cmd/device-checker
+          $env:GOOS='windows'; $env:GOARCH='amd64'
+          go build -trimpath -buildvcs=true "-ldflags=-H=windowsgui -X main.version=$version" -o bin/device-checker-windows-amd64.exe ./cmd/device-checker
       - name: Build desktop MSI
         working-directory: desktop
         shell: pwsh
@@ -39,6 +40,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           npm ci
+          npm test
           $version = $env:GITHUB_REF_NAME -replace '^desktop-v',''
           $config = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
           $config.version = $version
@@ -58,6 +60,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: desktop-windows, path: dist/, if-no-files-found: error }
 
+  # One universal app for Apple silicon and Intel Macs. The collector is built
+  # for both architectures and merged with lipo; Tauri builds a universal .app.
   macos:
     runs-on: macos-latest
     steps:
@@ -66,30 +70,46 @@ jobs:
         with: { go-version: stable }
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm, cache-dependency-path: desktop/package-lock.json }
-      - name: Prepare resources and package app
+      - name: Prepare the universal collector and package the app
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          go test ./...
-          GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=true -ldflags="-H=windowsgui" -o bin/device-checker-windows-amd64.exe ./cmd/device-checker
-          GOOS=darwin GOARCH=arm64 go build -trimpath -buildvcs=true -o bin/device-checker-macos-arm64 ./cmd/device-checker
-          GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=true -o bin/device-checker-linux-amd64 ./cmd/device-checker
-          cd desktop; npm ci
           version="${GITHUB_REF_NAME#desktop-v}"
+          go test ./...
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -buildvcs=true -ldflags="-X main.version=${version}" -o bin/device-checker-macos-arm64 ./cmd/device-checker
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -buildvcs=true -ldflags="-X main.version=${version}" -o bin/device-checker-macos-amd64 ./cmd/device-checker
+          lipo -create -output bin/device-checker-macos-universal bin/device-checker-macos-arm64 bin/device-checker-macos-amd64
+          chmod 0755 bin/device-checker-macos-universal
+          lipo -info bin/device-checker-macos-universal
+          lipo bin/device-checker-macos-universal -verify_arch arm64 x86_64
+          rustup target add x86_64-apple-darwin aarch64-apple-darwin
+          cd desktop
+          npm ci
+          npm test
           VERSION="$version" node -e 'const fs=require("fs");const p="src-tauri/tauri.conf.json";const c=JSON.parse(fs.readFileSync(p));c.version=process.env.VERSION;fs.writeFileSync(p,JSON.stringify(c,null,2))'
-          npx tauri build --bundles app
+          npx tauri build --target universal-apple-darwin --bundles app
+          bundle_dir="src-tauri/target/universal-apple-darwin/release/bundle/macos"
+          app="$bundle_dir/HackZero Device Checker.app"
+          lipo "$app/Contents/Resources/device-checker-macos-universal" -verify_arch arm64 x86_64
           mkdir -p ../dist
-          pkgbuild --component src-tauri/target/release/bundle/macos/HackZero\ Device\ Checker.app --install-location /Applications ../dist/HackZero-Device-Checker-macos-arm64.pkg
-          updater="$(find src-tauri/target/release/bundle/macos -name '*.app.tar.gz' -type f | head -n 1)"
-          cp "$updater" ../dist/HackZero-Device-Checker-macos-arm64.app.tar.gz
-          cp "$updater.sig" ../dist/HackZero-Device-Checker-macos-arm64.app.tar.gz.sig
+          pkgbuild --component "$app" --install-location /Applications ../dist/HackZero-Device-Checker-macos-universal.pkg
+          # The website links the arm64 name. Publish the same universal package
+          # under it too so existing links keep working on every Mac.
+          cp ../dist/HackZero-Device-Checker-macos-universal.pkg ../dist/HackZero-Device-Checker-macos-arm64.pkg
+          updater="$(find "$bundle_dir" -name '*.app.tar.gz' -type f | head -n 1)"
+          test -n "$updater"
+          cp "$updater" ../dist/HackZero-Device-Checker-macos-universal.app.tar.gz
+          cp "$updater.sig" ../dist/HackZero-Device-Checker-macos-universal.app.tar.gz.sig
       - uses: anchore/sbom-action@v0
-        with: { path: ., format: spdx-json, output-file: dist/HackZero-Device-Checker-macos-arm64.spdx.json, upload-artifact: false, upload-release-assets: false }
-      - run: cd dist && shasum -a 256 * > SHA256SUMS-macos-arm64.txt
+        with: { path: ., format: spdx-json, output-file: dist/HackZero-Device-Checker-macos-universal.spdx.json, upload-artifact: false, upload-release-assets: false }
+      - run: cd dist && shasum -a 256 * > SHA256SUMS-macos-universal.txt
       - uses: actions/attest-build-provenance@v2
-        with: { subject-path: dist/HackZero-Device-Checker-macos-arm64.pkg }
+        with:
+          subject-path: |
+            dist/HackZero-Device-Checker-macos-universal.pkg
+            dist/HackZero-Device-Checker-macos-arm64.pkg
       - uses: actions/upload-artifact@v4
         with: { name: desktop-macos, path: dist/, if-no-files-found: error }
 
@@ -101,7 +121,7 @@ jobs:
         with: { go-version: stable }
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm, cache-dependency-path: desktop/package-lock.json }
-      - name: Prepare resources and build DEB
+      - name: Prepare the bundled collector and build DEB
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -109,12 +129,12 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
-          go test ./...
-          GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=true -ldflags="-H=windowsgui" -o bin/device-checker-windows-amd64.exe ./cmd/device-checker
-          GOOS=darwin GOARCH=arm64 go build -trimpath -buildvcs=true -o bin/device-checker-macos-arm64 ./cmd/device-checker
-          GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=true -o bin/device-checker-linux-amd64 ./cmd/device-checker
-          cd desktop; npm ci
           version="${GITHUB_REF_NAME#desktop-v}"
+          go test ./...
+          GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=true -ldflags="-X main.version=${version}" -o bin/device-checker-linux-amd64 ./cmd/device-checker
+          cd desktop
+          npm ci
+          npm test
           VERSION="$version" node -e 'const fs=require("fs");const p="src-tauri/tauri.conf.json";const c=JSON.parse(fs.readFileSync(p));c.version=process.env.VERSION;fs.writeFileSync(p,JSON.stringify(c,null,2))'
           npx tauri build --bundles deb,appimage
           mkdir -p ../dist
@@ -143,9 +163,10 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          make_latest: "true"
           body: |
             Desktop packages are built from this public immutable tag. Verify a downloaded package with:
             `gh attestation verify PATH_TO_PACKAGE -R ${{ github.repository }}`
 
-            Compare its SHA-256 value to `SHA256SUMS.txt`. This workflow creates provenance, not a claim of Windows code signing or Apple notarization.
+            Compare its SHA-256 value to `SHA256SUMS.txt`. The macOS package is universal (Apple silicon and Intel); `HackZero-Device-Checker-macos-arm64.pkg` is the same package under its original name. This workflow creates provenance, not a claim of Windows code signing or Apple notarization.
           files: release/**/*

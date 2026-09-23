@@ -11,18 +11,35 @@ recovery location before completing setup.
 
 ## Screen lock needs attention
 
-Open **System Settings → Lock Screen**. Set **Require password after screen
-saver begins or display is turned off** to immediately, and set the inactivity
-timers to 15 minutes or less.
+Open **System Settings → Lock Screen**. The checker adds the display timer (or
+the screen saver timer, whichever is sooner) to **Require password after
+screen saver begins or display is turned off**, and the total must be 15
+minutes or less on **every** power source:
+
+- **Turn display off on battery when inactive** and **Turn display off on power
+  adapter when inactive** are checked separately. A MacBook often has a short
+  battery timer and a long power-adapter timer; the power-adapter one fails.
+- **Never** fails.
+- A password delay of 5 seconds or less counts as immediate. For example,
+  display off after 10 minutes plus a 5 minute password delay is exactly 15
+  minutes and passes.
+
+A configuration profile from your organization overrides these settings; if
+they are managed, ask the IT owner.
 
 ## Automatic updates are off
 
 Open **System Settings → General → Software Update → Automatic Updates** and
-enable automatic updates. Install any pending macOS update during an approved
-maintenance window.
+turn on **Check for updates**, **Download new updates when available**, and
+**Install Security Responses and system files**. Installing macOS updates
+automatically is recommended but not required. A waiting update is shown as a
+warning, not a failure; install it during an approved maintenance window.
 
 ## Endpoint protection needs attention
 
-Keep macOS current and leave Gatekeeper enabled. macOS includes XProtect; a
-managed organization may additionally require its approved endpoint-protection
-agent. Do not bypass a Gatekeeper warning to fix this status.
+Leave Gatekeeper enabled and keep **Install Security Responses and system
+files** on: that setting is what keeps XProtect's malware definitions current.
+If the definitions are more than 30 days old the checker shows a warning;
+connecting to the internet for a while usually clears it. A managed
+organization may additionally require its approved endpoint-protection agent.
+Do not bypass a Gatekeeper warning to fix this status.
