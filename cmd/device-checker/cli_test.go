@@ -28,7 +28,7 @@ func pairedDir(t *testing.T) (string, identity.Device) {
 	if err := device.Save(identityPath(dir)); err != nil {
 		t.Fatal(err)
 	}
-	pairing, _ := json.Marshal(savedState{Identity: device, ReportURL: "https://example.test/api/trust/device-checker/reports", WorkspaceName: "Acme", PersonName: "Fernanda"})
+	pairing, _ := json.Marshal(savedState{Identity: device, ReportURL: "https://example.test/api/trust/device-checker/reports", WorkspaceName: "Acme", PersonName: "Alex"})
 	if err := os.WriteFile(pairingPath(dir), pairing, 0600); err != nil {
 		t.Fatal(err)
 	}

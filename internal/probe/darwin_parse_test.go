@@ -106,7 +106,7 @@ func TestParseFileVaultState(t *testing.T) {
 		{"encrypting", ptr("FileVault is On.\nEncryption in progress: Percent completed = 42\n"), posture.DiskEncrypting, intp(42)},
 		{"decrypting", ptr("FileVault is On.\nDecryption in progress: Percent completed = 10\n"), posture.DiskDecrypting, intp(10)},
 		{"pending restart", ptr("FileVault is Off, but will be enabled after the next restart.\n"), posture.DiskPendingRestart, nil},
-		{"deferred", ptr("FileVault is Off.\nDeferred enablement appears to be active for user 'fernandaleony'.\n"), posture.DiskPendingRestart, nil},
+		{"deferred", ptr("FileVault is Off.\nDeferred enablement appears to be active for user 'alex'.\n"), posture.DiskPendingRestart, nil},
 	}
 	for _, c := range cases {
 		got := parseFileVaultState(c.in)
