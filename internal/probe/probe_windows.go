@@ -6,6 +6,7 @@ import (
 	"context"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/hackzero/device-checker/internal/posture"
@@ -42,8 +43,21 @@ func osVersion() string {
 	return posture.SanitizeToken(strings.TrimSpace(string(output)))
 }
 
+// createNoWindow is CREATE_NO_WINDOW: the child gets a console with no window.
+const createNoWindow = 0x08000000
+
 func powershell(timeout time.Duration, script string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	return exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script).Output()
+	return powershellCommand(ctx, script).Output()
+}
+
+// powershellCommand never shows a window. The desktop build of this collector
+// is a GUI-subsystem binary with no console to share, so without
+// CREATE_NO_WINDOW Windows gives every powershell.exe child a new, visible
+// console window. Programs the script starts (powercfg) inherit the hidden one.
+func powershellCommand(ctx context.Context, script string) *exec.Cmd {
+	command := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
+	command.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
+	return command
 }
